@@ -41,6 +41,7 @@ public class SyncedFolder implements Serializable, Cloneable {
     @Getter @Setter private String remotePath;
     @Getter @Setter private Boolean wifiOnly;
     @Getter @Setter private Boolean chargingOnly;
+    @Getter @Setter private Boolean existing;
     @Getter @Setter private Boolean subfolderByDate;
     @Getter @Setter private String account;
     @Getter @Setter private Integer uploadAction;
@@ -55,6 +56,7 @@ public class SyncedFolder implements Serializable, Cloneable {
      * @param remotePath      remote path
      * @param wifiOnly        upload on wifi only flag
      * @param chargingOnly    upload on charging only
+     * @param existing        upload existing files
      * @param subfolderByDate create sub-folders by date (month)
      * @param account         the account owning the synced folder
      * @param uploadAction    the action to be done after the upload
@@ -62,11 +64,11 @@ public class SyncedFolder implements Serializable, Cloneable {
      * @param timestampMs     the current timestamp in milliseconds
      * @param type            the type of the folder
      */
-    public SyncedFolder(String localPath, String remotePath, Boolean wifiOnly, Boolean chargingOnly,
+    public SyncedFolder(String localPath, String remotePath, Boolean wifiOnly, Boolean chargingOnly, Boolean existing,
                         Boolean subfolderByDate, String account, Integer uploadAction, Boolean enabled,
                         long timestampMs, MediaFolderType type) {
-        this(UNPERSISTED_ID, localPath, remotePath, wifiOnly, chargingOnly, subfolderByDate, account, uploadAction,
-             enabled, timestampMs, type);
+        this(UNPERSISTED_ID, localPath, remotePath, wifiOnly, chargingOnly, existing, subfolderByDate, account,
+             uploadAction, enabled, timestampMs, type);
     }
 
     /**
@@ -75,13 +77,14 @@ public class SyncedFolder implements Serializable, Cloneable {
      * @param id id
      */
     protected SyncedFolder(long id, String localPath, String remotePath, Boolean wifiOnly, Boolean chargingOnly,
-                           Boolean subfolderByDate, String account, Integer uploadAction, Boolean enabled,
-                           long timestampMs, MediaFolderType type) {
+                           Boolean existing, Boolean subfolderByDate, String account, Integer uploadAction,
+                           Boolean enabled, long timestampMs, MediaFolderType type) {
         this.id = id;
         this.localPath = localPath;
         this.remotePath = remotePath;
         this.wifiOnly = wifiOnly;
         this.chargingOnly = chargingOnly;
+        this.existing = existing;
         this.subfolderByDate = subfolderByDate;
         this.account = account;
         this.uploadAction = uploadAction;
