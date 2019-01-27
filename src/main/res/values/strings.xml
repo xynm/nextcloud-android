@@ -902,4 +902,8 @@
     <string name="file_detail_activity_error">Error retrieving activities for file</string>
     <string name="no_mutliple_accounts_allowed">Only one account allowed</string>
     <string name="remote_file_fetch_failed">Failed to find file!</string>
+
+    <string name="autoupload_blacklist_pattern">Edit Exclude Patterns</string>
+    <string name="blacklist_editor_exclude_pattern_title">Exclude Pattern</string>
+    <string name="blacklist_editor_exclude_pattern_subtitle">* as wildcard may be used</string>
 </resources>
