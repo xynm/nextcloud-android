@@ -406,7 +406,7 @@ public final class ThumbnailsCacheManager {
         private List<ThumbnailGenerationTask> mAsyncTasks;
         private Object mFile;
         private String mImageKey;
-        private FileDataStorageManager mStorageManager;
+        private FileDataStorageManagerInterface mStorageManager;
         private GetMethod getMethod;
 
         public ThumbnailGenerationTask(ImageView imageView, FileDataStorageManager storageManager, Account account)
@@ -431,7 +431,7 @@ public final class ThumbnailsCacheManager {
             return getMethod;
         }
 
-        public ThumbnailGenerationTask(FileDataStorageManager storageManager, Account account){
+        public ThumbnailGenerationTask(FileDataStorageManagerInterface storageManager, Account account) {
             if (storageManager == null) {
                 throw new IllegalArgumentException("storageManager must not be NULL");
             }

@@ -63,8 +63,8 @@ public class CreateFolderOperation extends SyncOperation implements OnRemoteOper
 
 
     @Override
-    protected RemoteOperationResult run(OwnCloudClient client) {
-        RemoteOperationResult result = new CreateFolderRemoteOperation(mRemotePath, mCreateFullPath).execute(client);
+    public RemoteOperationResult run(OwnCloudClient client) {
+        RemoteOperationResult result = createCreateFolderRemoteOperation(mRemotePath, mCreateFullPath).execute(client);
 
         if (result.isSuccess()) {
             RemoteOperationResult remoteFolderOperationResult = new ReadFolderRemoteOperation(mRemotePath)
@@ -77,6 +77,14 @@ public class CreateFolderOperation extends SyncOperation implements OnRemoteOper
         }
 
         return result;
+    }
+
+    public CreateFolderRemoteOperation createCreateFolderRemoteOperation(String mRemotePath, boolean mCreateFullPath) {
+        return new CreateFolderRemoteOperation(mRemotePath, mCreateFullPath);
+    }
+
+    public ReadFolderRemoteOperation createReadFolderRemoteOperation(String mRemotePath) {
+        return new ReadFolderRemoteOperation(mRemotePath);
     }
 
     @Override
@@ -124,7 +132,7 @@ public class CreateFolderOperation extends SyncOperation implements OnRemoteOper
             newDir.setPermissions(createdRemoteFolder.getPermissions());
             getStorageManager().saveFile(newDir);
 
-            Log_OC.d(TAG, "Create directory " + mRemotePath + " in Database");
+            // Log_OC.d(TAG, "Create directory " + mRemotePath + " in Database");
         }
     }
 
