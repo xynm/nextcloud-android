@@ -30,6 +30,7 @@ import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.lib.resources.files.ExistenceCheckRemoteOperation;
 
+import org.apache.commons.httpclient.Header;
 import org.apache.commons.httpclient.HttpStatus;
 
 import java.util.ArrayList;
@@ -46,35 +47,35 @@ import java.util.Locale;
  * {@link RemoteOperationResult#getData()} a value of {@link AuthenticationMethod}.
  */
 public class DetectAuthenticationMethodOperation extends RemoteOperation {
-    
+
     private static final String TAG = DetectAuthenticationMethodOperation.class.getSimpleName();
-    
+
     public enum AuthenticationMethod {
         UNKNOWN,
         NONE,
-        BASIC_HTTP_AUTH, 
+        BASIC_HTTP_AUTH,
         SAML_WEB_SSO,
         BEARER_TOKEN
     }
-    
+
     private Context mContext;
-    
+
     /**
      * Constructor
-     * 
+     *
      * @param context       Android context of the caller.
      */
     public DetectAuthenticationMethodOperation(Context context) {
         mContext = context;
     }
-    
+
 
     /**
      *  Performs the operation.
-     * 
+     *
      *  Triggers a check of existence on the root folder of the server, granting
      *  that the request is not authenticated.
-     *  
+     *
      *  Analyzes the result of check to find out what authentication method, if
      *  any, is requested by the server.
      */
@@ -82,21 +83,21 @@ public class DetectAuthenticationMethodOperation extends RemoteOperation {
 	protected RemoteOperationResult run(OwnCloudClient client) {
         RemoteOperationResult result = null;
         AuthenticationMethod authMethod = AuthenticationMethod.UNKNOWN;
-        
+
         RemoteOperation operation = new ExistenceCheckRemoteOperation("", mContext, false);
         client.clearCredentials();
         client.setFollowRedirects(false);
-        
+
         // try to access the root folder, following redirections but not SAML SSO redirections
         result = operation.execute(client);
-        String redirectedLocation = result.getRedirectedLocation(); 
+        String redirectedLocation = result.getRedirectedLocation();
         while (!TextUtils.isEmpty(redirectedLocation) && !result.isIdPRedirection()) {
             client.setBaseUri(Uri.parse(result.getRedirectedLocation()));
             result = operation.execute(client);
             redirectedLocation = result.getRedirectedLocation();
-        } 
+        }
 
-        // analyze response  
+        // analyze response
         if (result.getHttpCode() == HttpStatus.SC_UNAUTHORIZED) {
             ArrayList<String> authHeaders = result.getAuthenticateHeaders();
 
@@ -108,18 +109,18 @@ public class DetectAuthenticationMethodOperation extends RemoteOperation {
                 }
             }
             // else - fall back to UNKNOWN
-                    
+
         } else if (result.isSuccess()) {
             authMethod = AuthenticationMethod.NONE;
-            
+
         } else if (result.isIdPRedirection()) {
             authMethod = AuthenticationMethod.SAML_WEB_SSO;
         }
         // else - fall back to UNKNOWN
         Log_OC.d(TAG, "Authentication method found: " + authenticationMethodToString(authMethod));
-        
+
         if (authMethod != AuthenticationMethod.UNKNOWN) {
-            result = new RemoteOperationResult(true, result.getHttpCode(), result.getHttpPhrase(), null);
+            result = new RemoteOperationResult(true, result.getHttpCode(), result.getHttpPhrase(), new Header[0]);
         }
         ArrayList<Object> data = new ArrayList<>();
         data.add(authMethod);
@@ -127,8 +128,8 @@ public class DetectAuthenticationMethodOperation extends RemoteOperation {
         return result;  // same result instance, so that other errors
                         // can be handled by the caller transparently
 	}
-	
-	private String authenticationMethodToString(AuthenticationMethod value) {
+
+    private String authenticationMethodToString(AuthenticationMethod value) {
 	    switch (value){
 	    case NONE:
 	        return "NONE";
