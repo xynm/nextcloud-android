@@ -825,7 +825,8 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.SYNCED_FOLDER_SUBFOLDER_BY_DATE + " INTEGER, " // subfolder by date
                        + ProviderTableMeta.SYNCED_FOLDER_ACCOUNT + "  TEXT, "             // account
                        + ProviderTableMeta.SYNCED_FOLDER_UPLOAD_ACTION + " INTEGER, "     // upload action
-                       + ProviderTableMeta.SYNCED_FOLDER_TYPE + " INTEGER );"             // type
+                       + ProviderTableMeta.SYNCED_FOLDER_TYPE + " INTEGER, "              // type
+                       + ProviderTableMeta.SYNCED_FOLDER_HIDDEN + " INTEGER );"           // hidden
         );
     }
 
@@ -2013,6 +2014,24 @@ public class FileContentProvider extends ContentProvider {
             if (!upgraded) {
                 Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
             }
+
+            if (oldVersion < 50 && newVersion >= 50) {
+                Log_OC.i(SQL, "Entering in the #50 add show/hide to folderSync table");
+                db.beginTransaction();
+                try {
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.SYNCED_FOLDERS_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.SYNCED_FOLDER_HIDDEN + " INTEGER ");
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
         }
 
         @Override
@@ -2024,6 +2043,12 @@ public class FileContentProvider extends ContentProvider {
                                REMOVE_COLUMN + ProviderTableMeta.FILE_ENCRYPTED_NAME);
                 db.execSQL(ALTER_TABLE + ProviderTableMeta.CAPABILITIES_TABLE_NAME +
                                REMOVE_COLUMN + ProviderTableMeta.CAPABILITIES_END_TO_END_ENCRYPTION);
+            }
+
+            if(oldVersion == 50 && newVersion < 50) {
+                db.execSQL(ALTER_TABLE + ProviderTableMeta.SYNCED_FOLDERS_TABLE_NAME +
+                               REMOVE_COLUMN + ProviderTableMeta.SYNCED_FOLDER_HIDDEN);
+
             }
         }
     }
