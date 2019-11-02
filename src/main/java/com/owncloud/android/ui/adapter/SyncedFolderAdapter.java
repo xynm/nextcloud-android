@@ -21,7 +21,6 @@
 
 package com.owncloud.android.ui.adapter;
 
-import android.app.Activity;
 import android.content.Context;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
@@ -98,7 +97,7 @@ public class SyncedFolderAdapter extends SectionedRecyclerViewAdapter<SectionedV
 
     public void setSyncFolderItem(int location, SyncedFolderDisplayItem syncFolderItem) {
         // show all items OR
-        if (hideItems && syncFolderItem.getHidden() && filteredSyncFolderItems.contains(syncFolderItem)) {
+        if (hideItems && syncFolderItem.isHidden() && filteredSyncFolderItems.contains(syncFolderItem)) {
             filteredSyncFolderItems.remove(location);
         } else {
             if (filteredSyncFolderItems.contains(syncFolderItem)) {
@@ -122,7 +121,7 @@ public class SyncedFolderAdapter extends SectionedRecyclerViewAdapter<SectionedV
 
         // add item for display when either all items should be shown (!hideItems)
         // or if items should be hi
-        if (!hideItems || !syncFolderItem.getHidden()) {
+        if (!hideItems || !syncFolderItem.isHidden()) {
             filteredSyncFolderItems.add(syncFolderItem);
             notifyDataSetChanged();
         }
@@ -143,18 +142,18 @@ public class SyncedFolderAdapter extends SectionedRecyclerViewAdapter<SectionedV
      * @return Non-hidden items
      */
     private List<SyncedFolderDisplayItem> filterHiddenItems(List<SyncedFolderDisplayItem> items, boolean hide) {
-        if (hide) {
+        if (!hide) {
+            return items;
+        } else {
             List<SyncedFolderDisplayItem> ret = new ArrayList<>();
 
             for (SyncedFolderDisplayItem item : items) {
-                if (!item.getHidden() && !ret.contains(item)) {
+                if (!item.isHidden() && !ret.contains(item)) {
                     ret.add(item);
                 }
             }
 
             return ret;
-        } else {
-            return items;
         }
     }
 
@@ -295,7 +294,7 @@ public class SyncedFolderAdapter extends SectionedRecyclerViewAdapter<SectionedV
         popup.inflate(R.menu.synced_folders_adapter);
         popup.setOnMenuItemClickListener(i -> optionsItemSelected(i,section,item));
 
-        if (item.getHidden()) {
+        if (item.isHidden()) {
             popup.getMenu()
                 .findItem(R.id.action_auto_upload_folder_toggle_visibility)
                 .setTitle(R.string.autoupload_show_folder);

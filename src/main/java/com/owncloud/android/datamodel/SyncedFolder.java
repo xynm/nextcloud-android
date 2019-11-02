@@ -40,14 +40,14 @@ public class SyncedFolder implements Serializable, Cloneable {
     private long id = UNPERSISTED_ID;
     private String localPath;
     private String remotePath;
-    private Boolean wifiOnly;
-    private Boolean chargingOnly;
-    private Boolean subfolderByDate;
+    private boolean wifiOnly;
+    private boolean chargingOnly;
+    private boolean subfolderByDate;
     private String account;
-    private Integer uploadAction;
+    private int uploadAction;
     private boolean enabled;
     private MediaFolderType type;
-    private Boolean hidden;
+    private boolean hidden;
 
     /**
      * constructor for new, to be persisted entity.
@@ -63,9 +63,9 @@ public class SyncedFolder implements Serializable, Cloneable {
      * @param type            the type of the folder
      * @param hidden          hide item flag
      */
-    public SyncedFolder(String localPath, String remotePath, Boolean wifiOnly, Boolean chargingOnly,
-                        Boolean subfolderByDate, String account, Integer uploadAction, Boolean enabled,
-                        MediaFolderType type, Boolean hidden) {
+    public SyncedFolder(String localPath, String remotePath, boolean wifiOnly, boolean chargingOnly,
+                        boolean subfolderByDate, String account, int uploadAction, boolean enabled,
+                        MediaFolderType type, boolean hidden) {
         this.localPath = localPath;
         this.remotePath = remotePath;
         this.wifiOnly = wifiOnly;
