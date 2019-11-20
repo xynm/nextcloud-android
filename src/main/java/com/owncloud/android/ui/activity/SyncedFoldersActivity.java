@@ -436,7 +436,7 @@ public class SyncedFoldersActivity extends FileActivity implements SyncedFolderA
                 getString(R.string.instant_upload_path) + "/" + mediaFolder.folderName,
                 true,
                 false,
-                false,
+                true,
                 false,
                 getAccount().name,
                 FileUploader.LOCAL_BEHAVIOUR_FORGET,
@@ -525,7 +525,7 @@ public class SyncedFoldersActivity extends FileActivity implements SyncedFolderA
                 Log.d(TAG, "Show custom folder dialog");
                 SyncedFolderDisplayItem emptyCustomFolder = new SyncedFolderDisplayItem(
                     SyncedFolder.UNPERSISTED_ID, null, null, true, false,
-                    false, false, getAccount().name,
+                    true, false, getAccount().name,
                     FileUploader.LOCAL_BEHAVIOUR_FORGET, false, clock.getCurrentTime(), null, MediaFolderType.CUSTOM);
                 onSyncFolderSettingsClick(0, emptyCustomFolder);
             }
