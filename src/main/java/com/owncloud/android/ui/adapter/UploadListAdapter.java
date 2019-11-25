@@ -25,6 +25,7 @@ package com.owncloud.android.ui.adapter;
 
 import android.accounts.Account;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
@@ -43,7 +44,9 @@ import com.afollestad.sectionedrecyclerview.SectionedViewHolder;
 import com.nextcloud.client.account.UserAccountManager;
 import com.nextcloud.client.device.PowerManagementService;
 import com.nextcloud.client.network.ConnectivityService;
+import com.owncloud.android.MainApp;
 import com.owncloud.android.R;
+import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.datamodel.ThumbnailsCacheManager;
 import com.owncloud.android.datamodel.UploadsStorageManager;
@@ -53,6 +56,7 @@ import com.owncloud.android.db.OCUploadComparator;
 import com.owncloud.android.db.UploadResult;
 import com.owncloud.android.files.services.FileUploader;
 import com.owncloud.android.lib.common.utils.Log_OC;
+import com.owncloud.android.ui.activity.ConflictsResolveActivity;
 import com.owncloud.android.ui.activity.FileActivity;
 import com.owncloud.android.utils.DisplayUtils;
 import com.owncloud.android.utils.MimeTypeUtil;
@@ -74,6 +78,7 @@ public class UploadListAdapter extends SectionedRecyclerViewAdapter<SectionedVie
     private ProgressListener progressListener;
     private FileActivity parentActivity;
     private UploadsStorageManager uploadsStorageManager;
+    private FileDataStorageManager storageManager;
     private ConnectivityService connectivityService;
     private PowerManagementService powerManagementService;
     private UserAccountManager accountManager;
@@ -157,12 +162,14 @@ public class UploadListAdapter extends SectionedRecyclerViewAdapter<SectionedVie
 
     public UploadListAdapter(final FileActivity fileActivity,
                              final UploadsStorageManager uploadsStorageManager,
+                             final FileDataStorageManager storageManager,
                              final UserAccountManager accountManager,
                              final ConnectivityService connectivityService,
                              final PowerManagementService powerManagementService) {
         Log_OC.d(TAG, "UploadListAdapter");
         this.parentActivity = fileActivity;
         this.uploadsStorageManager = uploadsStorageManager;
+        this.storageManager = storageManager;
         this.accountManager = accountManager;
         this.connectivityService = connectivityService;
         this.powerManagementService = powerManagementService;
@@ -338,26 +345,43 @@ public class UploadListAdapter extends SectionedRecyclerViewAdapter<SectionedVie
 
         // click on item
         if (item.getUploadStatus() == UploadStatus.UPLOAD_FAILED) {
-            if (UploadResult.CREDENTIAL_ERROR == item.getLastResult()) {
-                itemViewHolder.itemLayout.setOnClickListener(v ->
-                                                                 parentActivity.getFileOperationsHelper().checkCurrentCredentials(
-                                                                     item.getAccount(accountManager)));
-            } else {
-                // not a credentials error
-                itemViewHolder.itemLayout.setOnClickListener(v -> {
-                    File file = new File(item.getLocalPath());
-                    if (file.exists()) {
-                        FileUploader.UploadRequester requester = new FileUploader.UploadRequester();
-                        requester.retry(parentActivity, accountManager, item);
-                        loadUploadItemsFromDb();
-                    } else {
-                        DisplayUtils.showSnackMessage(
-                                v.getRootView().findViewById(android.R.id.content),
-                                R.string.local_file_not_found_message
-                        );
+            final UploadResult uploadResult = item.getLastResult();
+            itemViewHolder.itemLayout.setOnClickListener(v -> {
+                if (uploadResult == UploadResult.CREDENTIAL_ERROR) {
+                    parentActivity.getFileOperationsHelper().checkCurrentCredentials(
+                        item.getAccount(accountManager));
+                    return;
+                } else if(uploadResult == UploadResult.SYNC_CONFLICT) {
+                    OCFile ocFile = storageManager.getFileByPath(item.getRemotePath());
+                    if (ocFile != null) {
+                        ocFile.setStoragePath(item.getLocalPath());
+
+                        Context context = MainApp.getAppContext();
+                        Intent i = new Intent(context, ConflictsResolveActivity.class);
+                        i.setFlags(i.getFlags() | Intent.FLAG_ACTIVITY_NEW_TASK);
+                        i.putExtra(ConflictsResolveActivity.EXTRA_FILE, ocFile);
+                        i.putExtra(ConflictsResolveActivity.EXTRA_ACCOUNT, item.getAccount(accountManager));
+                        i.putExtra(ConflictsResolveActivity.EXTRA_CONFLICT_UPLOAD, item);
+                        context.startActivity(i);
+                        return;
                     }
-                });
-            }
+
+                    // Remote file doesn't exist anymore = there is not more conflict
+                }
+
+                // not a credentials error
+                File file = new File(item.getLocalPath());
+                if (file.exists()) {
+                    FileUploader.UploadRequester requester = new FileUploader.UploadRequester();
+                    requester.retry(parentActivity, accountManager, item);
+                    loadUploadItemsFromDb();
+                } else {
+                    DisplayUtils.showSnackMessage(
+                        v.getRootView().findViewById(android.R.id.content),
+                        R.string.local_file_not_found_message
+                    );
+                }
+            });
         } else {
             itemViewHolder.itemLayout.setOnClickListener(v ->
                     onUploadItemClick(item));

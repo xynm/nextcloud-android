@@ -167,6 +167,7 @@ public class UploadListActivity extends FileActivity {
 
         uploadListAdapter = new UploadListAdapter(this,
                                                   uploadsStorageManager,
+                                                  getStorageManager(),
                                                   userAccountManager,
                                                   connectivityService,
                                                   powerManagementService);

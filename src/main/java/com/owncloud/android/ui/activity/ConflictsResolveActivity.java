@@ -25,6 +25,8 @@ import android.content.Intent;
 import android.os.Bundle;
 
 import com.owncloud.android.datamodel.OCFile;
+import com.owncloud.android.datamodel.UploadsStorageManager;
+import com.owncloud.android.db.OCUpload;
 import com.owncloud.android.files.services.FileDownloader;
 import com.owncloud.android.files.services.FileUploader;
 import com.owncloud.android.lib.common.utils.Log_OC;
@@ -32,52 +34,76 @@ import com.owncloud.android.ui.dialog.ConflictsResolveDialog;
 import com.owncloud.android.ui.dialog.ConflictsResolveDialog.Decision;
 import com.owncloud.android.ui.dialog.ConflictsResolveDialog.OnConflictDecisionMadeListener;
 
+import javax.inject.Inject;
+
 
 /**
  * Wrapper activity which will be launched if keep-in-sync file will be modified by external
  * application.
  */
 public class ConflictsResolveActivity extends FileActivity implements OnConflictDecisionMadeListener {
+    public static final String EXTRA_CONFLICT_UPLOAD = "CONFLICT_UPLOAD";
 
     private static final String TAG = ConflictsResolveActivity.class.getSimpleName();
+
+    @Inject UploadsStorageManager uploadsStorageManager;
+
+    private OCUpload conflictUpload;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        if(savedInstanceState != null) {
+            this.conflictUpload = savedInstanceState.getParcelable(EXTRA_CONFLICT_UPLOAD);
+        } else {
+            this.conflictUpload = getIntent().getParcelableExtra(EXTRA_CONFLICT_UPLOAD);
+        }
     }
 
     @Override
     public void conflictDecisionMade(Decision decision) {
-
-        Integer behaviour = null;
-        Boolean forceOverwrite = null;
+        OCFile file = getFile();
+        FileUploader.UploadRequester uploadRequester = new FileUploader.UploadRequester();
 
         switch (decision) {
             case CANCEL:
-                finish();
                 return;
-            case OVERWRITE:
-                // use local version -> overwrite on server
-                forceOverwrite = true;
-                break;
+            case KEEP_LOCAL:
             case KEEP_BOTH:
-                behaviour = FileUploader.LOCAL_BEHAVIOUR_MOVE;
+                Integer localBehaviour;
+                FileUploader.NameCollisionPolicy collisionPolicy;
+                if (decision == Decision.KEEP_LOCAL) {
+                    // Overwrite remote file
+                    localBehaviour = null;
+                    collisionPolicy = FileUploader.NameCollisionPolicy.OVERWRITE;
+                } else {
+                    // Upload local version and rename
+                    localBehaviour = FileUploader.LOCAL_BEHAVIOUR_MOVE;
+                    collisionPolicy = FileUploader.NameCollisionPolicy.RENAME;
+                }
+
+                uploadRequester.uploadUpdate(this, getAccount(), file, localBehaviour, collisionPolicy);
+
+                if (this.conflictUpload != null) {
+                    uploadsStorageManager.removeUpload(this.conflictUpload);
+                }
                 break;
-            case SERVER:
-                // use server version -> delete local, request download
+            case KEEP_SERVER:
+                // Overwrite local file
                 Intent intent = new Intent(this, FileDownloader.class);
                 intent.putExtra(FileDownloader.EXTRA_ACCOUNT, getAccount());
-                intent.putExtra(FileDownloader.EXTRA_FILE, getFile());
+                intent.putExtra(FileDownloader.EXTRA_FILE, file);
+                if (this.conflictUpload != null) {
+                    intent.putExtra(FileDownloader.EXTRA_CONFLICT_UPLOAD, this.conflictUpload);
+                }
                 startService(intent);
-                finish();
-                return;
+                break;
             default:
                 Log_OC.e(TAG, "Unhandled conflict decision " + decision);
                 return;
         }
 
-        FileUploader.UploadRequester requester = new FileUploader.UploadRequester();
-        requester.uploadUpdate(this, getAccount(), getFile(), behaviour, forceOverwrite);
         finish();
     }
 
@@ -87,26 +113,20 @@ public class ConflictsResolveActivity extends FileActivity implements OnConflict
         if (getAccount() != null) {
             OCFile file = getFile();
             if (getFile() == null) {
-                Log_OC.e(TAG, "No conflictive file received");
+                Log_OC.e(TAG, "No file received");
                 finish();
             } else {
-                /// Check whether the 'main' OCFile handled by the Activity is contained in the current Account
-                file = getStorageManager().getFileByPath(file.getRemotePath());   // file = null if not in the
-                // current Account
-                if (file != null) {
-                    setFile(file);
-                    ConflictsResolveDialog d = ConflictsResolveDialog.newInstance(this);
-                    d.showDialog(this);
-
+                // Check whether the file is contained in the current Account
+                if (getStorageManager().fileExists(file.getRemotePath())) {
+                    ConflictsResolveDialog dialog = ConflictsResolveDialog.newInstance(this);
+                    dialog.showDialog(this);
                 } else {
-                    // account was changed to a different one - just finish
+                    // Account was changed to a different one - just finish
                     finish();
                 }
             }
-
         } else {
             finish();
         }
-
     }
 }
