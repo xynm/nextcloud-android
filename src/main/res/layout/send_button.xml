@@ -25,6 +25,8 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:paddingTop="@dimen/standard_padding"
+    android:paddingStart="@dimen/alternate_half_padding"
+    android:paddingEnd="@dimen/alternate_half_padding"
     tools:ignore="UseCompoundDrawables">
 
     <ImageView
@@ -32,14 +34,16 @@
         android:layout_width="@dimen/share_icon_size"
         android:layout_height="@dimen/share_icon_size"
         android:layout_gravity="center_horizontal"
-        android:contentDescription="@string/sendbutton_description" />
+        android:contentDescription="@string/sendbutton_description"
+        tools:src="@mipmap/ic_launcher" />
 
     <TextView
         android:id="@+id/send_button_text"
-        android:layout_width="@dimen/share_icon_size"
-        android:layout_height="@dimen/share_icon_size"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:layout_gravity="center"
         android:gravity="center_horizontal"
         android:paddingTop="@dimen/standard_half_padding"
-        android:textColor="@color/text_color" />
+        android:textColor="@color/text_color"
+        tools:text="@string/app_name" />
 </LinearLayout>

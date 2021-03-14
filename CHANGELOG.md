@@ -1,4 +1,157 @@
-3.9.0 (November, 12, 2019)
+## 3.15.1 (March, 10, 2021)
+
+- share fix
+- passcode fix
+- enhance share access
+
+For a full list, please see https://github.com/nextcloud/android/milestone/57
+
+## 3.15.0 (February, 02, 2021)
+
+- Media instead of Photos: also show videos
+- UI Improvement (shimmer)
+- Bug fixes all over the place
+- Drop Android 4.4, new min version Android 5.0
+
+For a full list, please see https://github.com/nextcloud/android/milestone/52
+
+## 3.14.3 (January, 13, 2021)
+
+- Fix crash when clicking "+" button
+- Fix push notifications on some devices
+- Fix updating of sharee list
+- Fix crash during setting status
+- Fix Crash Sharing files to Nextcloud via Android Apps
+
+For a full list, please see https://github.com/nextcloud/android/milestone/56
+
+## 3.14.2 (January, 13, 2021)
+
+- Fix push notifications on some devices
+- Fix updating of sharee list
+- Fix crash during setting status
+- Fix Crash Sharing files to Nextcloud via Android Apps
+
+For a full list, please see https://github.com/nextcloud/android/milestone/54
+
+## 3.14.1 (December, 02, 2020)
+
+- Fix crash due to service not started in time
+- Fix UI while media playback
+- Fix uploading direct camera images with more than one picture
+- Fix conflict handling on auto upload
+
+For a full list, please see https://github.com/nextcloud/android/milestone/53
+
+## 3.14.0 (November, 18, 2020)
+
+- Prevent Firebase crashes: Exodus will warn about tracker, but code wise it is disabled
+- Status support
+- Document storage enhancement @tgrote
+- Auto upload media detection improvements @AndyScherzinger
+- Sharing UI rewrite
+- Drop Android 4.3, new min version Android 4.4
+
+For a full list, please see https://github.com/nextcloud/android/milestone/50
+
+## 3.13.1 (September, 15, 2020)
+
+- bugfix release
+- auto upload obey metered network
+- fix adding account via qrCode
+- fix deleting password on share
+- fix conflict handling on auto upload
+- lots more
+
+For a full list, please see https://github.com/nextcloud/android/milestone/51
+
+## 3.13.0 (August, 18, 2020)
+
+- new UI overhaul @Shagequi @JorisBodin
+- E2EE beta support
+- dark mode enhancement @AndyScherzinger
+- warn on outdated NC16 server
+- requires Android 4.3 or newer
+
+For a full list, please see https://github.com/nextcloud/android/milestone/48
+
+## 3.12.1 (July, 07, 2020)
+
+- UI does not hang when changing auto upload
+- fix crash on contacts backup settings
+- bugfixes
+
+For a full list, please see https://github.com/nextcloud/android/milestone/49
+
+## 3.12.0 (June, 10, 2020)
+
+- add circle support for searching/displaying
+- if no offline editor is available, use OO/Cool/Text
+- add possibility to set expiration date on user/group shares (NC18+)
+- rich workspaces can be disabled on server side
+- improved loading view
+- requires Android 4.2 or newer
+
+For a full list, please see https://github.com/nextcloud/android/milestone/42
+
+## 3.11.1 (April, 23, 2020)
+
+- Crash while browsing files
+- auto upload:
+ - fix wrong conflict detection on custom folder
+ - allow to choose default conflict strategy @fodinabor
+ - fix hanging UI after saving
+- open office files online if no local app installed
+
+For a full list, please see https://github.com/nextcloud/android/milestone/47
+
+## 3.11.0 (March, 26, 2020)
+
+- not enough space dialog @Shagequi
+- fix shared search
+- upload existing images in auto upload @koying @ArisuOngaku
+- allow deep links @Charon77
+- support for circle
+- last version supporting Android 4.1
+
+For a full list, please see https://github.com/nextcloud/android/milestone/41
+
+## 3.10.1 (February, 05, 2020)
+
+- fix crash on self-signed certificates
+- fix openOffice open files with special chars
+
+For a full list, please see https://github.com/nextcloud/android/milestone/45
+
+## 3.10.0 (January, 17, 2020)
+
+- Dark theme (@dan0xii, @AndyScherzinger)
+- Rich workspace (NC18+)
+- collaborative text editor (NC18+)
+- links in Markdown previews clickable (@AndyScherzinger)
+- Show/Hide auto upload list items (@AndyScherzinger)
+- drop 4.0.x support
+- outdated server warning set to NC15
+- latest supported version NC13
+
+For a full list, please see https://github.com/nextcloud/android/milestone/40
+
+## 3.9.2 (December, 05, 2019)
+
+- HOTFIX: fix login loop
+- Fix crash on opening png images
+- Translation updates
+
+For a full list, please see https://github.com/nextcloud/android/milestone/44
+
+## 3.9.1 (December, 04, 2019)
+
+- Fix crash on opening png images
+- Translation updates
+
+For a full list, please see https://github.com/nextcloud/android/milestone/43
+
+## 3.9.0 (November, 12, 2019)
 
 - preview Markdown with syntax highlighting @AndyScherzinger
 - improved DavX5 integration @bitfireAT

@@ -34,12 +34,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.res.ColorStateList;
 import android.content.res.Resources.NotFoundException;
 import android.graphics.Color;
-import android.graphics.PorterDuff;
-import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -60,11 +56,13 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
-import android.widget.ProgressBar;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.textfield.TextInputEditText;
+import com.google.android.material.textfield.TextInputLayout;
 import com.nextcloud.client.di.Injectable;
 import com.nextcloud.client.preferences.AppPreferences;
 import com.owncloud.android.MainApp;
@@ -92,7 +90,11 @@ import com.owncloud.android.utils.DisplayUtils;
 import com.owncloud.android.utils.ErrorMessageAdapter;
 import com.owncloud.android.utils.FileSortOrder;
 import com.owncloud.android.utils.MimeType;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeButtonUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
+import com.owncloud.android.utils.theme.ThemeDrawableUtils;
+import com.owncloud.android.utils.theme.ThemeTextInputUtils;
+import com.owncloud.android.utils.theme.ThemeToolbarUtils;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -122,6 +124,9 @@ import androidx.appcompat.widget.SearchView;
 import androidx.core.view.MenuItemCompat;
 import androidx.fragment.app.DialogFragment;
 import androidx.fragment.app.FragmentManager;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+
+import static com.owncloud.android.utils.DisplayUtils.openSortingOrderDialogFragment;
 
 /**
  * This can be used to upload things to an ownCloud instance.
@@ -140,6 +145,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
     public static final int SINGLE_PARENT = 1;
 
     @Inject AppPreferences preferences;
+    @Inject LocalBroadcastManager localBroadcastManager;
     private AccountManager mAccountManager;
     private Stack<String> mParents = new Stack<>();
     private List<Parcelable> mStreamsToUpload;
@@ -164,7 +170,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
     private TextView mEmptyListMessage;
     private TextView mEmptyListHeadline;
     private ImageView mEmptyListIcon;
-    private ProgressBar mEmptyListProgress;
+    private MaterialButton sortButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -188,7 +194,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
                 EVENT_SINGLE_FOLDER_CONTENTS_SYNCED);
         syncIntentFilter.addAction(RefreshFolderOperation.EVENT_SINGLE_FOLDER_SHARES_SYNCED);
         mSyncBroadcastReceiver = new SyncBroadcastReceiver();
-        registerReceiver(mSyncBroadcastReceiver, syncIntentFilter);
+        localBroadcastManager.registerReceiver(mSyncBroadcastReceiver, syncIntentFilter);
 
         // Init Fragment without UI to retain AsyncTask across configuration changes
         FragmentManager fm = getSupportFragmentManager();
@@ -238,12 +244,21 @@ public class ReceiveExternalFilesActivity extends FileActivity
     @Override
     protected void onStart() {
         super.onStart();
+
+        if (mAccountManager.getAccountsByType(MainApp.getAccountType(this)).length == 0) {
+            Toast.makeText(this,
+                           String.format(getString(R.string.uploader_wrn_no_account_text),
+                                         getString(R.string.app_name)),
+                           Toast.LENGTH_LONG).show();
+            return;
+        }
+
         initTargetFolder();
         populateDirectoryList();
     }
 
     @Override
-    protected void onSaveInstanceState(Bundle outState) {
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
         Log_OC.d(TAG, "onSaveInstanceState() start");
         super.onSaveInstanceState(outState);
         outState.putString(KEY_PARENTS, generatePath(mParents));
@@ -256,7 +271,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
     @Override
     protected void onDestroy() {
         if (mSyncBroadcastReceiver != null) {
-            unregisterReceiver(mSyncBroadcastReceiver);
+            localBroadcastManager.unregisterReceiver(mSyncBroadcastReceiver);
         }
         super.onDestroy();
     }
@@ -264,6 +279,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
     @Override
     public void onSortingOrderChosen(FileSortOrder newSortOrder) {
         preferences.setSortOrder(mFile, newSortOrder);
+        sortButton.setText(DisplayUtils.getSortOrderStringId(newSortOrder));
         populateDirectoryList();
     }
 
@@ -287,7 +303,8 @@ public class ReceiveExternalFilesActivity extends FileActivity
                 intent.putExtra("authorities", new String[]{MainApp.getAuthTokenType()});
                 startActivityForResult(intent, REQUEST_CODE__SETUP_ACCOUNT);
             });
-            builder.setNegativeButton(R.string.uploader_wrn_no_account_quit_btn_text, (dialog, which) -> getActivity().finish());
+            builder.setNeutralButton(R.string.uploader_wrn_no_account_quit_btn_text,
+                                 (dialog, which) -> getActivity().finish());
             return builder.create();
         }
     }
@@ -319,7 +336,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
         }
 
         @Override
-        public void onAttach(Context context) {
+        public void onAttach(@NonNull Context context) {
             super.onAttach(context);
         }
 
@@ -398,10 +415,11 @@ public class ReceiveExternalFilesActivity extends FileActivity
                 mFileCategory = CATEGORY_MAPS_URL;
             }
 
-            final EditText userInput = view.findViewById(R.id.user_input);
+            final TextInputEditText userInput = view.findViewById(R.id.user_input);
+            final TextInputLayout userInputContainer = view.findViewById(R.id.user_input_container);
             setFilename(userInput, selectPos);
-            userInput.setHighlightColor(ThemeUtils.primaryColor(getContext()));
             userInput.requestFocus();
+            ThemeTextInputUtils.colorTextInput(userInputContainer, userInput, ThemeColorUtils.primaryColor(getContext()));
 
             final Spinner spinner = view.findViewById(R.id.file_type);
             setupSpinner(adapter, selectPos, userInput, spinner);
@@ -462,7 +480,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
                     ((ReceiveExternalFilesActivity) getActivity()).uploadFile(tmpName, filename);
                 }
             });
-            builder.setNegativeButton(R.string.common_cancel, (dialog, id) -> dialog.cancel());
+            builder.setNeutralButton(R.string.common_cancel, (dialog, id) -> dialog.cancel());
 
             return builder.create();
         }
@@ -688,14 +706,14 @@ public class ReceiveExternalFilesActivity extends FileActivity
         ActionBar actionBar = getSupportActionBar();
 
         if (isHaveMultipleAccount()) {
-            ThemeUtils.setColoredSubtitle(actionBar, getAccount().name, this);
+            ThemeToolbarUtils.setColoredSubtitle(actionBar, getAccount().name, this);
         } else if (actionBar != null) {
             actionBar.setSubtitle(null);
         }
     }
 
     private void populateDirectoryList() {
-        setContentView(R.layout.uploader_layout);
+        setContentView(R.layout.receive_external_files);
         setupEmptyList();
         setupToolbar();
         ActionBar actionBar = getSupportActionBar();
@@ -703,14 +721,17 @@ public class ReceiveExternalFilesActivity extends FileActivity
 
         ListView mListView = findViewById(android.R.id.list);
 
+        findViewById(R.id.sort_list_button_group).setVisibility(View.VISIBLE);
+        findViewById(R.id.switch_grid_view_button).setVisibility(View.GONE);
+
         String current_dir = mParents.peek();
         boolean notRoot = mParents.size() > 1;
 
         if (actionBar != null) {
             if (TextUtils.isEmpty(current_dir)) {
-                ThemeUtils.setColoredTitle(actionBar, R.string.uploader_top_message, this);
+                ThemeToolbarUtils.setColoredTitle(actionBar, R.string.uploader_top_message, this);
             } else {
-                ThemeUtils.setColoredTitle(actionBar, current_dir, this);
+                ThemeToolbarUtils.setColoredTitle(actionBar, current_dir, this);
             }
 
             actionBar.setDisplayHomeAsUpEnabled(notRoot);
@@ -741,49 +762,41 @@ public class ReceiveExternalFilesActivity extends FileActivity
                 }
 
                 UploaderAdapter sa = new UploaderAdapter(this,
-                        data,
-                        R.layout.uploader_list_item_layout,
-                        new String[]{"dirname"},
-                        new int[]{R.id.filename},
-                        getStorageManager(), getAccount());
+                                                         data,
+                                                         R.layout.uploader_list_item_layout,
+                                                         new String[]{"dirname"},
+                                                         new int[]{R.id.filename},
+                                                         getStorageManager(),
+                                                         getUser().get());
 
                 mListView.setAdapter(sa);
             }
             MaterialButton btnChooseFolder = findViewById(R.id.uploader_choose_folder);
-            btnChooseFolder.setBackgroundTintMode(PorterDuff.Mode.SRC_ATOP);
-            btnChooseFolder.setBackgroundTintList(ColorStateList.valueOf(ThemeUtils.primaryColor(this, true)));
+            ThemeButtonUtils.colorPrimaryButton(btnChooseFolder, this);
             btnChooseFolder.setOnClickListener(this);
-            btnChooseFolder.setTextColor(ThemeUtils.fontColor(this));
 
             if (mFile.canWrite()) {
                 btnChooseFolder.setEnabled(true);
-                ThemeUtils.tintDrawable(btnChooseFolder.getBackground(),
-                                        ThemeUtils.primaryColor(getAccount(), true, this));
+                ThemeButtonUtils.colorPrimaryButton(btnChooseFolder, this);
             } else {
                 btnChooseFolder.setEnabled(false);
-                ThemeUtils.tintDrawable(btnChooseFolder.getBackground(), Color.GRAY);
+                btnChooseFolder.setBackgroundColor(Color.GRAY);
             }
 
-            if (getSupportActionBar() != null) {
-                getSupportActionBar().setBackgroundDrawable(new ColorDrawable(
-                        ThemeUtils.primaryColor(getAccount(), false, this)));
-            }
+            ThemeToolbarUtils.colorStatusBar(this);
 
-            ThemeUtils.colorStatusBar(this, ThemeUtils.primaryColor(getAccount(), false, this));
-
-            ThemeUtils.colorToolbarProgressBar(this, ThemeUtils.primaryColor(getAccount(), false, this));
-
-            Drawable backArrow = getResources().getDrawable(R.drawable.ic_arrow_back);
-
-            if (actionBar != null) {
-                actionBar.setHomeAsUpIndicator(ThemeUtils.tintDrawable(backArrow, ThemeUtils.fontColor(this)));
-            }
+            ThemeToolbarUtils.tintBackButton(actionBar, this);
 
             Button btnNewFolder = findViewById(R.id.uploader_cancel);
-            btnNewFolder.setTextColor(ThemeUtils.primaryColor(this, true));
+            btnNewFolder.setTextColor(ThemeColorUtils.primaryColor(this, true));
             btnNewFolder.setOnClickListener(this);
 
             mListView.setOnItemClickListener(this);
+
+            sortButton = findViewById(R.id.sort_button);
+            FileSortOrder sortOrder = preferences.getSortOrderByFolder(mFile);
+            sortButton.setText(DisplayUtils.getSortOrderStringId(sortOrder));
+            sortButton.setOnClickListener(l -> openSortingOrderDialogFragment(getSupportFragmentManager(), sortOrder));
         }
     }
 
@@ -792,9 +805,6 @@ public class ReceiveExternalFilesActivity extends FileActivity
         mEmptyListMessage = findViewById(R.id.empty_list_view_text);
         mEmptyListHeadline = findViewById(R.id.empty_list_view_headline);
         mEmptyListIcon = findViewById(R.id.empty_list_icon);
-        mEmptyListProgress = findViewById(R.id.empty_list_progress);
-        mEmptyListProgress.getIndeterminateDrawable().setColorFilter(ThemeUtils.primaryColor(this),
-                PorterDuff.Mode.SRC_IN);
     }
 
     public void setMessageForEmptyList(@StringRes final int headline, @StringRes final int message,
@@ -803,11 +813,9 @@ public class ReceiveExternalFilesActivity extends FileActivity
             if (mEmptyListContainer != null && mEmptyListMessage != null) {
                 mEmptyListHeadline.setText(headline);
                 mEmptyListMessage.setText(message);
-
-                mEmptyListIcon.setImageDrawable(ThemeUtils.tintDrawable(icon, ThemeUtils.primaryColor(this, true)));
-
+                mEmptyListIcon.setImageDrawable(
+                    ThemeDrawableUtils.tintDrawable(icon, ThemeColorUtils.primaryColor(this, true)));
                 mEmptyListIcon.setVisibility(View.VISIBLE);
-                mEmptyListProgress.setVisibility(View.GONE);
                 mEmptyListMessage.setVisibility(View.VISIBLE);
             }
         });
@@ -887,19 +895,19 @@ public class ReceiveExternalFilesActivity extends FileActivity
     }
 
     public void uploadFile(String tmpName, String filename) {
-        FileUploader.UploadRequester requester = new FileUploader.UploadRequester();
-        requester.uploadNewFile(
+        FileUploader.uploadNewFile(
             getBaseContext(),
             getAccount(),
-                tmpName,
+            tmpName,
             mFile.getRemotePath() + filename,
             FileUploader.LOCAL_BEHAVIOUR_COPY,
             null,
             true,
             UploadFileOperation.CREATED_BY_USER,
             false,
-            false
-            );
+            false,
+            FileUploader.NameCollisionPolicy.ASK_USER
+        );
         finish();
     }
 
@@ -909,7 +917,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
             this,
             mStreamsToUpload,
             mUploadPath,
-            getAccount(),
+            getUser().orElseThrow(RuntimeException::new),
             FileUploader.LOCAL_BEHAVIOUR_DELETE,
             true, // Show waiting dialog while file is being copied from private storage
             this  // Copy temp task listener
@@ -1031,7 +1039,7 @@ public class ReceiveExternalFilesActivity extends FileActivity
         newFolderMenuItem.setEnabled(mFile.canWrite());
 
         // hacky as no default way is provided
-        ThemeUtils.themeSearchView(searchView, true, this);
+        ThemeToolbarUtils.themeSearchView(searchView, this);
 
         return true;
     }
@@ -1051,12 +1059,6 @@ public class ReceiveExternalFilesActivity extends FileActivity
                 break;
             case R.id.action_switch_account:
                 showAccountChooserDialog();
-                break;
-            case R.id.action_sort:
-                SortingOrderDialogFragment mSortingOrderDialogFragment = SortingOrderDialogFragment.newInstance(
-                    preferences.getSortOrderByFolder(mFile));
-                mSortingOrderDialogFragment.show(getSupportFragmentManager(),
-                        SortingOrderDialogFragment.SORTING_ORDER_FRAGMENT);
                 break;
             default:
                 retval = super.onOptionsItemSelected(item);
@@ -1107,9 +1109,9 @@ public class ReceiveExternalFilesActivity extends FileActivity
 
                     } else {
                         OCFile currentFile = (mFile == null) ? null :
-                                getStorageManager().getFileByPath(mFile.getRemotePath());
+                            getStorageManager().getFileByPath(mFile.getRemotePath());
                         OCFile currentDir = (getCurrentFolder() == null) ? null :
-                                getStorageManager().getFileByPath(getCurrentFolder().getRemotePath());
+                            getStorageManager().getFileByPath(getCurrentFolder().getRemotePath());
 
                         if (currentDir == null) {
                             // current folder was removed from the server
@@ -1151,14 +1153,12 @@ public class ReceiveExternalFilesActivity extends FileActivity
                             }
                         }
                     }
-                    removeStickyBroadcast(intent);
                     Log_OC.d(TAG, "Setting progress visibility to " + mSyncInProgress);
 
                 }
             } catch (RuntimeException e) {
                 // avoid app crashes after changing the serial id of RemoteOperationResult
                 // in owncloud library with broadcast notifications pending to process
-                removeStickyBroadcast(intent);
                 DataHolderUtil.getInstance().delete(intent.getStringExtra(FileSyncAdapter.EXTRA_RESULT));
             }
         }

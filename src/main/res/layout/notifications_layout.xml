@@ -19,26 +19,26 @@
   License along with this program.  If not, see <http://www.gnu.org/licenses/>.
 -->
 <androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/drawer_layout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:clickable="true"
-    android:fitsSystemWindows="true">
+    android:fitsSystemWindows="true"
+    android:focusable="true">
 
-    <!-- The main content view -->
-    <RelativeLayout
+    <androidx.coordinatorlayout.widget.CoordinatorLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:layout_height="match_parent">
 
-        <include
-            android:id="@+id/navigation_bar"
-            layout="@layout/toolbar_standard"/>
+        <include layout="@layout/toolbar_standard" />
 
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_below="@+id/navigation_bar">
+            android:layout_below="@id/appbar"
+            app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
             <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
                 android:id="@+id/swipe_containing_list"
@@ -51,13 +51,15 @@
                     android:id="@android:id/list"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:layout_marginBottom="-3dp"
                     android:layout_marginLeft="-3dp"
                     android:layout_marginRight="-3dp"
+                    android:layout_marginBottom="-3dp"
+                    android:background="@color/bg_default"
                     android:clipToPadding="false"
                     android:scrollbarStyle="outsideOverlay"
                     android:scrollbars="vertical"
-                    android:visibility="visible"/>
+                    android:visibility="visible"
+                    tools:listitem="@layout/notification_list_item" />
 
             </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
@@ -68,16 +70,41 @@
                 android:footerDividersEnabled="false"
                 android:visibility="visible">
 
-                <include layout="@layout/empty_list"/>
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent">
+
+                    <LinearLayout
+                        android:id="@+id/loading_content"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="visible">
+
+                        <include layout="@layout/activity_list_item_shimmer" />
+
+                        <include layout="@layout/activity_list_item_shimmer" />
+
+                        <include layout="@layout/activity_list_item_shimmer" />
+
+                        <include layout="@layout/activity_list_item_shimmer" />
+
+                    </LinearLayout>
+
+                    <include
+                        android:id="@+id/empty_list"
+                        layout="@layout/empty_list" />
+
+                </FrameLayout>
             </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
         </FrameLayout>
-    </RelativeLayout>
+    </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
     <include
         layout="@layout/drawer"
-        android:layout_width="240dp"
+        android:layout_width="@dimen/drawer_width"
         android:layout_height="match_parent"
-        android:layout_gravity="start"/>
+        android:layout_gravity="start" />
 
 </androidx.drawerlayout.widget.DrawerLayout>

@@ -22,25 +22,85 @@ package com.owncloud.android.datamodel;
 
 import org.parceler.Parcel;
 
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import java.util.Locale;
 
 /**
  * Template for creating a file from it via RichDocuments app
  */
-
 @Parcel
-@Getter
-@Setter
-@AllArgsConstructor
-@NoArgsConstructor
 public class Template {
-
     public int id;
     public String name;
     public String thumbnailLink;
-    public String type;
+    public Type type;
     public String extension;
+
+    public Template() {
+        // empty constructor
+    }
+
+    public Template(int id, String name, String thumbnailLink, Type type, String extension) {
+        this.id = id;
+        this.name = name;
+        this.thumbnailLink = thumbnailLink;
+        this.type = type;
+        this.extension = extension;
+    }
+
+    public enum Type {
+        DOCUMENT, SPREADSHEET, PRESENTATION, UNKNOWN
+    }
+
+    public static Type parse(String type) {
+        switch (type.toLowerCase(Locale.US)) {
+            case "document":
+                return Type.DOCUMENT;
+            case "spreadsheet":
+                return Type.SPREADSHEET;
+            case "presentation":
+                return Type.PRESENTATION;
+            default:
+                return Type.UNKNOWN;
+        }
+    }
+
+    public int getId() {
+        return this.id;
+    }
+
+    public String getName() {
+        return this.name;
+    }
+
+    public String getThumbnailLink() {
+        return this.thumbnailLink;
+    }
+
+    public Type getType() {
+        return this.type;
+    }
+
+    public String getExtension() {
+        return this.extension;
+    }
+
+    public void setId(int id) {
+        this.id = id;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public void setThumbnailLink(String thumbnailLink) {
+        this.thumbnailLink = thumbnailLink;
+    }
+
+    public void setType(Type type) {
+        this.type = type;
+    }
+
+    public void setExtension(String extension) {
+        this.extension = extension;
+    }
 }

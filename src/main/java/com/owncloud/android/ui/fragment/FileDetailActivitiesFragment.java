@@ -23,33 +23,26 @@
 
 package com.owncloud.android.ui.fragment;
 
-import android.accounts.Account;
-import android.accounts.AuthenticatorException;
-import android.accounts.OperationCanceledException;
-import android.content.Context;
-import android.graphics.PorterDuff;
+import android.content.ContentResolver;
+import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.text.Editable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.ProgressBar;
-import android.widget.TextView;
 
 import com.google.android.material.snackbar.Snackbar;
-import com.google.android.material.textfield.TextInputEditText;
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
 import com.nextcloud.client.di.Injectable;
-import com.owncloud.android.MainApp;
+import com.nextcloud.client.network.ClientFactory;
+import com.nextcloud.common.NextcloudClient;
 import com.owncloud.android.R;
+import com.owncloud.android.databinding.FileDetailsActivitiesFragmentBinding;
 import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
-import com.owncloud.android.lib.common.OwnCloudAccount;
 import com.owncloud.android.lib.common.OwnCloudClient;
-import com.owncloud.android.lib.common.OwnCloudClientManagerFactory;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.lib.resources.activities.GetActivitiesRemoteOperation;
@@ -58,103 +51,73 @@ import com.owncloud.android.lib.resources.comments.MarkCommentsAsReadRemoteOpera
 import com.owncloud.android.lib.resources.files.ReadFileVersionsRemoteOperation;
 import com.owncloud.android.lib.resources.files.model.FileVersion;
 import com.owncloud.android.lib.resources.status.OCCapability;
-import com.owncloud.android.lib.resources.status.OwnCloudVersion;
 import com.owncloud.android.operations.CommentFileOperation;
 import com.owncloud.android.ui.activity.ComponentsGetter;
-import com.owncloud.android.ui.activity.FileActivity;
 import com.owncloud.android.ui.adapter.ActivityAndVersionListAdapter;
 import com.owncloud.android.ui.events.CommentsEvent;
 import com.owncloud.android.ui.helpers.FileOperationsHelper;
 import com.owncloud.android.ui.interfaces.ActivityListInterface;
 import com.owncloud.android.ui.interfaces.VersionListInterface;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.DisplayUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
+import com.owncloud.android.utils.theme.ThemeLayoutUtils;
+import com.owncloud.android.utils.theme.ThemeTextInputUtils;
 
 import org.apache.commons.httpclient.HttpStatus;
 import org.greenrobot.eventbus.EventBus;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
 import javax.inject.Inject;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
+import androidx.core.content.res.ResourcesCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentActivity;
+import androidx.lifecycle.Lifecycle;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
-import butterknife.BindString;
-import butterknife.BindView;
-import butterknife.ButterKnife;
-import butterknife.OnClick;
-import butterknife.Unbinder;
 
 public class FileDetailActivitiesFragment extends Fragment implements
     ActivityListInterface,
+    DisplayUtils.AvatarGenerationListener,
     VersionListInterface.View,
     Injectable {
 
     private static final String TAG = FileDetailActivitiesFragment.class.getSimpleName();
 
     private static final String ARG_FILE = "FILE";
-    private static final String ARG_ACCOUNT = "ACCOUNT";
+    private static final String ARG_USER = "USER";
     private static final int END_REACHED = 0;
 
     private ActivityAndVersionListAdapter adapter;
-    private Unbinder unbinder;
     private OwnCloudClient ownCloudClient;
+    private NextcloudClient nextcloudClient;
 
     private OCFile file;
-    private Account account;
+    private User user;
 
     private int lastGiven;
     private boolean isLoadingActivities;
-
-    @BindView(R.id.empty_list_view)
-    public LinearLayout emptyContentContainer;
-
-    @BindView(R.id.swipe_containing_list)
-    public SwipeRefreshLayout swipeListRefreshLayout;
-
-    @BindView(R.id.swipe_containing_empty)
-    public SwipeRefreshLayout swipeEmptyListRefreshLayout;
-
-    @BindView(R.id.empty_list_view_text)
-    public TextView emptyContentMessage;
-
-    @BindView(R.id.empty_list_view_headline)
-    public TextView emptyContentHeadline;
-
-    @BindView(R.id.empty_list_icon)
-    public ImageView emptyContentIcon;
-
-    @BindView(R.id.empty_list_progress)
-    public ProgressBar emptyContentProgressBar;
-
-    @BindView(android.R.id.list)
-    public RecyclerView recyclerView;
-
-    @BindView(R.id.commentInputField)
-    public TextInputEditText commentInput;
-
-    @BindString(R.string.activities_no_results_headline)
-    public String noResultsHeadline;
-
-    @BindString(R.string.activities_no_results_message)
-    public String noResultsMessage;
 
     private boolean restoreFileVersionSupported;
     private FileOperationsHelper operationsHelper;
     private VersionListInterface.CommentCallback callback;
 
-    @Inject UserAccountManager accountManager;
+    private FileDetailsActivitiesFragmentBinding binding;
 
-    public static FileDetailActivitiesFragment newInstance(OCFile file, Account account) {
+    @Inject UserAccountManager accountManager;
+    @Inject ClientFactory clientFactory;
+    @Inject ContentResolver contentResolver;
+
+    public static FileDetailActivitiesFragment newInstance(OCFile file, User user) {
         FileDetailActivitiesFragment fragment = new FileDetailActivitiesFragment();
         Bundle args = new Bundle();
         args.putParcelable(ARG_FILE, file);
-        args.putParcelable(ARG_ACCOUNT, account);
+        args.putParcelable(ARG_USER, user);
         fragment.setArguments(args);
         return fragment;
     }
@@ -164,54 +127,71 @@ public class FileDetailActivitiesFragment extends Fragment implements
                              ViewGroup container,
                              Bundle savedInstanceState) {
 
-        file = getArguments().getParcelable(ARG_FILE);
-        account = getArguments().getParcelable(ARG_ACCOUNT);
+        final Bundle arguments = getArguments();
+        if (arguments == null) {
+            throw new IllegalStateException("arguments are mandatory");
+        }
+        file = arguments.getParcelable(ARG_FILE);
+        user = arguments.getParcelable(ARG_USER);
 
         if (savedInstanceState != null) {
-            file = savedInstanceState.getParcelable(FileActivity.EXTRA_FILE);
-            account = savedInstanceState.getParcelable(FileActivity.EXTRA_ACCOUNT);
+            file = savedInstanceState.getParcelable(ARG_FILE);
+            user = savedInstanceState.getParcelable(ARG_USER);
         }
 
-        View view = inflater.inflate(R.layout.file_details_activities_fragment, container, false);
-        unbinder = ButterKnife.bind(this, view);
+        binding = FileDetailsActivitiesFragmentBinding.inflate(inflater,container,false);
+        View view = binding.getRoot();
 
         setupView();
 
-        onCreateSwipeToRefresh(swipeEmptyListRefreshLayout);
-        onCreateSwipeToRefresh(swipeListRefreshLayout);
+        ThemeLayoutUtils.colorSwipeRefreshLayout(getContext(), binding.swipeContainingEmpty);
+        ThemeLayoutUtils.colorSwipeRefreshLayout(getContext(), binding.swipeContainingList);
 
         fetchAndSetData(-1);
 
-        swipeListRefreshLayout.setOnRefreshListener(() -> onRefreshListLayout(swipeListRefreshLayout));
-        swipeEmptyListRefreshLayout.setOnRefreshListener(() -> onRefreshListLayout(swipeEmptyListRefreshLayout));
+        binding.swipeContainingList.setOnRefreshListener(() -> {
+            setLoadingMessage();
+            binding.swipeContainingList.setRefreshing(true);
+            fetchAndSetData(-1);
+        });
+
+        binding.swipeContainingEmpty.setOnRefreshListener(() -> {
+            setLoadingMessageEmpty();
+            fetchAndSetData(-1);
+        });
 
         callback = new VersionListInterface.CommentCallback() {
 
             @Override
             public void onSuccess() {
-                commentInput.getText().clear();
+                binding.commentInputField.getText().clear();
                 fetchAndSetData(-1);
             }
 
             @Override
             public void onError(int error) {
-                Snackbar.make(recyclerView, error, Snackbar.LENGTH_LONG).show();
+                Snackbar.make(binding.list, error, Snackbar.LENGTH_LONG).show();
             }
         };
 
-        commentInput.getBackground().setColorFilter(
-                ThemeUtils.primaryAccentColor(getContext()),
-                PorterDuff.Mode.SRC_ATOP
-        );
+        binding.submitComment.setOnClickListener(v -> submitComment());
 
-        ThemeUtils.themeEditText(getContext(), commentInput, false);
+        ThemeTextInputUtils.colorTextInput(binding.commentInputFieldContainer,
+                                           binding.commentInputField,
+                                           ThemeColorUtils.primaryColor(getContext()));
+
+        DisplayUtils.setAvatar(user,
+                               this,
+                               getResources().getDimension(R.dimen.activity_icon_radius),
+                               getResources(),
+                               binding.avatar,
+                               getContext());
 
         return view;
     }
 
-    @OnClick(R.id.submitComment)
     public void submitComment() {
-        Editable commentField = commentInput.getText();
+        Editable commentField = binding.commentInputField.getText();
 
         if (commentField == null) {
             return;
@@ -224,47 +204,46 @@ public class FileDetailActivitiesFragment extends Fragment implements
         }
     }
 
-    private void onRefreshListLayout(SwipeRefreshLayout refreshLayout) {
-        setLoadingMessage();
-        if (refreshLayout != null && refreshLayout.isRefreshing()) {
-            refreshLayout.setRefreshing(false);
-        }
-        fetchAndSetData(-1);
+    private void setLoadingMessage() {
+        binding.swipeContainingEmpty.setVisibility(View.GONE);
     }
 
-    private void setLoadingMessage() {
-        emptyContentHeadline.setText(R.string.file_list_loading);
-        emptyContentMessage.setText("");
-        emptyContentIcon.setVisibility(View.GONE);
-        emptyContentProgressBar.setVisibility(View.VISIBLE);
+    @VisibleForTesting
+    public void setLoadingMessageEmpty() {
+        binding.swipeContainingList.setVisibility(View.GONE);
+        binding.emptyList.emptyListView.setVisibility(View.GONE);
+        binding.loadingContent.setVisibility(View.VISIBLE);
     }
 
     @Override
-    public void onDestroy() {
-        super.onDestroy();
-        unbinder.unbind();
+    public void onDestroyView() {
+        super.onDestroyView();
+        binding = null;
     }
 
     private void setupView() {
-        FileDataStorageManager storageManager = new FileDataStorageManager(account, requireActivity().getContentResolver());
+        FileDataStorageManager storageManager = new FileDataStorageManager(user.toPlatformAccount(),
+                                                                           contentResolver);
         operationsHelper = ((ComponentsGetter) requireActivity()).getFileOperationsHelper();
 
-        OCCapability capability = storageManager.getCapability(account.name);
-        OwnCloudVersion serverVersion = accountManager.getServerVersion(account);
-        restoreFileVersionSupported = capability.getFilesVersioning().isTrue() &&
-                serverVersion.compareTo(OwnCloudVersion.nextcloud_14) >= 0;
+        OCCapability capability = storageManager.getCapability(user.getAccountName());
+        restoreFileVersionSupported = capability.getFilesVersioning().isTrue();
 
-        emptyContentProgressBar.getIndeterminateDrawable().setColorFilter(ThemeUtils.primaryAccentColor(getContext()),
-                PorterDuff.Mode.SRC_IN);
-        emptyContentIcon.setImageDrawable(getResources().getDrawable(R.drawable.ic_activity_light_grey));
+        binding.emptyList.emptyListIcon.setImageDrawable(ResourcesCompat.getDrawable(getResources(), R.drawable.ic_activity, null));
+        binding.emptyList.emptyListView.setVisibility(View.GONE);
 
-        adapter = new ActivityAndVersionListAdapter(getContext(), accountManager, this, this, storageManager, capability);
-        recyclerView.setAdapter(adapter);
+        adapter = new ActivityAndVersionListAdapter(getContext(),
+                                                    accountManager,
+                                                    this,
+                                                    this,
+                                                    clientFactory
+        );
+        binding.list.setAdapter(adapter);
 
         LinearLayoutManager layoutManager = new LinearLayoutManager(getContext());
 
-        recyclerView.setLayoutManager(layoutManager);
-        recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+        binding.list.setLayoutManager(layoutManager);
+        binding.list.addOnScrollListener(new RecyclerView.OnScrollListener() {
 
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
@@ -299,28 +278,20 @@ public class FileDetailActivitiesFragment extends Fragment implements
             return;
         }
 
-        final SwipeRefreshLayout empty = swipeEmptyListRefreshLayout;
-        final SwipeRefreshLayout list = swipeListRefreshLayout;
-        final Account currentAccount = accountManager.getCurrentAccount();
+        final User user = accountManager.getUser();
 
-        if (currentAccount == null) {
+        if (user.isAnonymous()) {
             activity.runOnUiThread(() -> {
                 setEmptyContent(getString(R.string.common_error), getString(R.string.file_detail_activity_error));
-                list.setVisibility(View.GONE);
-                empty.setVisibility(View.VISIBLE);
             });
             return;
         }
 
-        final Context context = MainApp.getAppContext();
-
         Thread t = new Thread(() -> {
-            OwnCloudAccount ocAccount;
             try {
-                ocAccount = new OwnCloudAccount(currentAccount, context);
-                ownCloudClient = OwnCloudClientManagerFactory.getDefaultSingleton().
-                        getClientFor(ocAccount, MainApp.getAppContext());
-                ownCloudClient.setOwnCloudVersion(accountManager.getServerVersion(currentAccount));
+                ownCloudClient = clientFactory.create(user);
+                nextcloudClient = clientFactory.createNextcloudClient(user);
+
                 isLoadingActivities = true;
 
                 GetActivitiesRemoteOperation getRemoteNotificationOperation;
@@ -332,7 +303,7 @@ public class FileDetailActivitiesFragment extends Fragment implements
                 }
 
                 Log_OC.d(TAG, "BEFORE getRemoteActivitiesOperation.execute");
-                final RemoteOperationResult result = getRemoteNotificationOperation.execute(ownCloudClient);
+                RemoteOperationResult result = nextcloudClient.execute(getRemoteNotificationOperation);
 
                 ArrayList<Object> versions = null;
                 if (restoreFileVersionSupported) {
@@ -341,7 +312,9 @@ public class FileDetailActivitiesFragment extends Fragment implements
 
                     RemoteOperationResult result1 = readFileVersionsOperation.execute(ownCloudClient);
 
-                    versions = result1.getData();
+                    if (result1.isSuccess()) {
+                        versions = result1.getData();
+                    }
                 }
 
                 if (result.isSuccess() && result.getData() != null) {
@@ -359,34 +332,28 @@ public class FileDetailActivitiesFragment extends Fragment implements
                     }
 
                     activity.runOnUiThread(() -> {
-                        populateList(activitiesAndVersions, lastGiven == -1);
-                        if (adapter.getItemCount() == 0) {
-                            setEmptyContent(noResultsHeadline, noResultsMessage);
-                            list.setVisibility(View.GONE);
-                            empty.setVisibility(View.VISIBLE);
-                        } else {
-                            empty.setVisibility(View.GONE);
-                            list.setVisibility(View.VISIBLE);
+                        if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
+                            populateList(activitiesAndVersions, lastGiven == -1);
                         }
-                        isLoadingActivities = false;
                     });
                 } else {
                     Log_OC.d(TAG, result.getLogMessage());
                     // show error
                     String logMessage = result.getLogMessage();
                     if (result.getHttpCode() == HttpStatus.SC_NOT_MODIFIED) {
-                        logMessage = noResultsMessage;
+                        logMessage = getString(R.string.activities_no_results_message);
                     }
                     final String finalLogMessage = logMessage;
                     activity.runOnUiThread(() -> {
-                        setErrorContent(finalLogMessage);
-                        isLoadingActivities = false;
+                        if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
+                            setErrorContent(finalLogMessage);
+                            isLoadingActivities = false;
+                        }
                     });
                 }
 
                 hideRefreshLayoutLoader(activity);
-            } catch (com.owncloud.android.lib.common.accounts.AccountUtils.AccountNotFoundException | IOException |
-                OperationCanceledException | AuthenticatorException | NullPointerException e) {
+            } catch (ClientFactory.CreationException e) {
                 Log_OC.e(TAG, "Error fetching file details activities", e);
             }
         });
@@ -408,53 +375,58 @@ public class FileDetailActivitiesFragment extends Fragment implements
         }).start();
     }
 
-    private void populateList(List<Object> activities, boolean clear) {
-        adapter.setActivityAndVersionItems(activities, ownCloudClient, clear);
+    @VisibleForTesting
+    public void populateList(List<Object> activities, boolean clear) {
+        adapter.setActivityAndVersionItems(activities, nextcloudClient, clear);
+
+        if (adapter.getItemCount() == 0) {
+            setEmptyContent(
+                getString(R.string.activities_no_results_headline),
+                getString(R.string.activities_no_results_message)
+                           );
+        } else {
+            binding.swipeContainingList.setVisibility(View.VISIBLE);
+            binding.swipeContainingEmpty.setVisibility(View.GONE);
+            binding.emptyList.emptyListView.setVisibility(View.GONE);
+        }
+        isLoadingActivities = false;
     }
 
     private void setEmptyContent(String headline, String message) {
-        if (emptyContentContainer != null && emptyContentMessage != null) {
-            emptyContentIcon.setImageDrawable(requireContext().getResources().getDrawable(R.drawable.ic_activity_light_grey));
-            emptyContentHeadline.setText(headline);
-            emptyContentMessage.setText(message);
-
-            emptyContentMessage.setVisibility(View.VISIBLE);
-            emptyContentProgressBar.setVisibility(View.GONE);
-            emptyContentIcon.setVisibility(View.VISIBLE);
-        }
+        setInfoContent(R.drawable.ic_activity, headline, message);
     }
 
-    private void setErrorContent(String message) {
-        if (emptyContentContainer != null && emptyContentMessage != null) {
-            emptyContentHeadline.setText(R.string.common_error);
-            emptyContentIcon.setImageDrawable(requireContext().getResources().getDrawable(R.drawable.ic_list_empty_error));
-            emptyContentMessage.setText(message);
+    @VisibleForTesting
+    public void setErrorContent(String message) {
+        setInfoContent(R.drawable.ic_list_empty_error, getString(R.string.common_error), message);
+    }
 
-            emptyContentMessage.setVisibility(View.VISIBLE);
-            emptyContentProgressBar.setVisibility(View.GONE);
-            emptyContentIcon.setVisibility(View.VISIBLE);
-        }
+    private void setInfoContent(@DrawableRes int icon, String headline, String message) {
+        binding.emptyList.emptyListIcon.setImageDrawable(ResourcesCompat.getDrawable(requireContext().getResources(),
+                                                                                     icon,
+                                                                                     null));
+        binding.emptyList.emptyListViewHeadline.setText(headline);
+        binding.emptyList.emptyListViewText.setText(message);
+
+        binding.swipeContainingList.setVisibility(View.GONE);
+        binding.loadingContent.setVisibility(View.GONE);
+
+        binding.emptyList.emptyListViewHeadline.setVisibility(View.VISIBLE);
+        binding.emptyList.emptyListViewText.setVisibility(View.VISIBLE);
+        binding.emptyList.emptyListIcon.setVisibility(View.VISIBLE);
+        binding.emptyList.emptyListView.setVisibility(View.VISIBLE);
+        binding.swipeContainingEmpty.setVisibility(View.VISIBLE);
     }
 
     private void hideRefreshLayoutLoader(FragmentActivity activity) {
         activity.runOnUiThread(() -> {
-            if (swipeListRefreshLayout != null) {
-                swipeListRefreshLayout.setRefreshing(false);
+            if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
+                binding.swipeContainingList.setRefreshing(false);
+                binding.swipeContainingEmpty.setRefreshing(false);
+                binding.emptyList.emptyListView.setVisibility(View.GONE);
+                isLoadingActivities = false;
             }
-            if (swipeEmptyListRefreshLayout != null) {
-                swipeEmptyListRefreshLayout.setRefreshing(false);
-            }
-            isLoadingActivities = false;
         });
-    }
-
-    protected void onCreateSwipeToRefresh(SwipeRefreshLayout refreshLayout) {
-        int primaryColor = ThemeUtils.primaryColor(getContext());
-        int darkColor = ThemeUtils.primaryDarkColor(getContext());
-        int accentColor = ThemeUtils.primaryAccentColor(getContext());
-
-        // Colors in animations
-        refreshLayout.setColorSchemeColors(accentColor, primaryColor, darkColor);
     }
 
     @Override
@@ -466,13 +438,23 @@ public class FileDetailActivitiesFragment extends Fragment implements
     public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
 
-        outState.putParcelable(FileActivity.EXTRA_FILE, file);
-        outState.putParcelable(FileActivity.EXTRA_ACCOUNT, account);
+        outState.putParcelable(ARG_FILE, file);
+        outState.putParcelable(ARG_USER, user);
     }
 
     @Override
     public void onRestoreClicked(FileVersion fileVersion) {
         operationsHelper.restoreFileVersion(fileVersion);
+    }
+
+    @Override
+    public void avatarGenerated(Drawable avatarDrawable, Object callContext) {
+        binding.avatar.setImageDrawable(avatarDrawable);
+    }
+
+    @Override
+    public boolean shouldCallGeneratedCallback(String tag, Object callContext) {
+        return false;
     }
 
     private static class SubmitCommentTask extends AsyncTask<Void, Void, Boolean> {

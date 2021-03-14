@@ -47,7 +47,7 @@ import com.owncloud.android.operations.UpdateOCVersionOperation;
 import com.owncloud.android.ui.activity.ErrorsWhileCopyingHandlerActivity;
 import com.owncloud.android.ui.notifications.NotificationUtils;
 import com.owncloud.android.utils.DataHolderUtil;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
 
 import org.apache.jackrabbit.webdav.DavException;
 
@@ -59,6 +59,7 @@ import java.util.Map;
 
 import androidx.annotation.PluralsRes;
 import androidx.core.app.NotificationCompat;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 /**
  * Implementation of {@link AbstractThreadedSyncAdapter} responsible for synchronizing
@@ -347,7 +348,7 @@ public class FileSyncAdapter extends AbstractOwnCloudSyncAdapter {
 
         if (mCancellation && i <files.size()) {
             Log_OC.d(TAG,
-                    "Leaving synchronization before synchronizing " + files.get(i).getRemotePath() +
+                     "Leaving synchronization before synchronizing " + files.get(i).getRemotePath() +
                             " due to cancellation request");
         }
     }
@@ -379,8 +380,7 @@ public class FileSyncAdapter extends AbstractOwnCloudSyncAdapter {
         }
 
         intent.setPackage(getContext().getPackageName());
-        getContext().sendStickyBroadcast(intent);
-        //LocalBroadcastManager.getInstance(getContext()).sendBroadcast(intent);
+        LocalBroadcastManager.getInstance(getContext()).sendBroadcast(intent);
     }
 
 
@@ -509,7 +509,7 @@ public class FileSyncAdapter extends AbstractOwnCloudSyncAdapter {
     private NotificationCompat.Builder createNotificationBuilder() {
         NotificationCompat.Builder notificationBuilder = new NotificationCompat.Builder(getContext());
         notificationBuilder.setSmallIcon(R.drawable.notification_icon).setAutoCancel(true);
-        notificationBuilder.setColor(ThemeUtils.primaryColor(getContext(), true));
+        notificationBuilder.setColor(ThemeColorUtils.primaryColor(getContext(), true));
         return notificationBuilder;
     }
 

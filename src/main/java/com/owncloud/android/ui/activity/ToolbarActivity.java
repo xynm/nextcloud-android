@@ -22,35 +22,55 @@
 
 package com.owncloud.android.ui.activity;
 
+import android.animation.AnimatorInflater;
+import android.annotation.SuppressLint;
 import android.graphics.Bitmap;
-import android.graphics.PorterDuff;
+import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.view.View;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
+import android.widget.RelativeLayout;
 import android.widget.TextView;
 
+import com.google.android.material.appbar.AppBarLayout;
+import com.google.android.material.button.MaterialButton;
+import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.textview.MaterialTextView;
 import com.owncloud.android.R;
 import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
+import com.owncloud.android.utils.theme.ThemeDrawableUtils;
+import com.owncloud.android.utils.theme.ThemeToolbarUtils;
+import com.owncloud.android.utils.theme.ThemeUtils;
 
-import androidx.annotation.ColorInt;
 import androidx.annotation.StringRes;
 import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.widget.AppCompatSpinner;
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
 
 /**
- * Base class providing toolbar registration functionality, see {@link #setupToolbar()}.
+ * Base class providing toolbar registration functionality, see {@link #setupToolbar(boolean, boolean)}.
  */
 public abstract class ToolbarActivity extends BaseActivity {
-    private ProgressBar mProgressBar;
+    protected MaterialButton mMenuButton;
+    protected MaterialTextView mSearchText;
+    protected MaterialButton mSwitchAccountButton;
+
+    private AppBarLayout mAppBar;
+    private RelativeLayout mDefaultToolbar;
+    private Toolbar mToolbar;
+    private MaterialCardView mHomeSearchToolbar;
     private ImageView mPreviewImage;
+    private FrameLayout mPreviewImageContainer;
     private LinearLayout mInfoBox;
     private TextView mInfoBoxMessage;
+    protected AppCompatSpinner mToolbarSpinner;
+    private boolean isHomeSearchToolbarShow = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,62 +78,102 @@ public abstract class ToolbarActivity extends BaseActivity {
     }
 
     /**
-     * Toolbar setup that must be called in implementer's {@link #onCreate} after {@link #setContentView} if they
-     * want to use the toolbar.
+     * Toolbar setup that must be called in implementer's {@link #onCreate} after {@link #setContentView} if they want
+     * to use the toolbar.
      */
-    protected void setupToolbar(boolean useBackgroundImage) {
-        int primaryColor = ThemeUtils.primaryColor(this, false);
-        int fontColor = ThemeUtils.fontColor(this);
+    private void setupToolbar(boolean isHomeSearchToolbarShow, boolean showSortListButtonGroup) {
+        int fontColor = ThemeColorUtils.appBarPrimaryFontColor(this);
 
-        Toolbar toolbar = findViewById(R.id.toolbar);
-        setSupportActionBar(toolbar);
+        mToolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(mToolbar);
+        ThemeToolbarUtils.colorStatusBar(this);
 
-        mProgressBar = findViewById(R.id.progressBar);
-        if (mProgressBar != null) {
-            mProgressBar.setIndeterminateDrawable(
-                    ContextCompat.getDrawable(this, R.drawable.actionbar_progress_indeterminate_horizontal));
+        mAppBar = findViewById(R.id.appbar);
+        mDefaultToolbar = findViewById(R.id.default_toolbar);
+        mHomeSearchToolbar = findViewById(R.id.home_toolbar);
+        mMenuButton = findViewById(R.id.menu_button);
+        mSearchText = findViewById(R.id.search_text);
+        mSwitchAccountButton = findViewById(R.id.switch_account_button);
 
-            ThemeUtils.colorToolbarProgressBar(this, primaryColor);
+        if (showSortListButtonGroup) {
+            findViewById(R.id.sort_list_button_group).setVisibility(View.VISIBLE);
         }
+
+        this.isHomeSearchToolbarShow = isHomeSearchToolbarShow;
+        updateActionBarTitleAndHomeButton(null);
+
         mInfoBox = findViewById(R.id.info_box);
         mInfoBoxMessage = findViewById(R.id.info_box_message);
 
         mPreviewImage = findViewById(R.id.preview_image);
+        mPreviewImageContainer = findViewById(R.id.preview_image_frame);
 
-        ThemeUtils.colorStatusBar(this, primaryColor);
+        mToolbarSpinner = findViewById(R.id.toolbar_spinner);
 
-        if (toolbar.getOverflowIcon() != null) {
-            ThemeUtils.tintDrawable(toolbar.getOverflowIcon(), fontColor);
+        if (mToolbar.getOverflowIcon() != null) {
+            ThemeDrawableUtils.tintDrawable(mToolbar.getOverflowIcon(), fontColor);
         }
 
-        if (toolbar.getNavigationIcon() != null) {
-            ThemeUtils.tintDrawable(toolbar.getNavigationIcon(), fontColor);
-        }
-
-        if (!useBackgroundImage) {
-            toolbar.setBackgroundColor(primaryColor);
+        if (mToolbar.getNavigationIcon() != null) {
+            ThemeDrawableUtils.tintDrawable(mToolbar.getNavigationIcon(), fontColor);
         }
     }
 
     public void setupToolbar() {
-        setupToolbar(false);
+        setupToolbar(false, false);
+    }
+
+    public void setupHomeSearchToolbarWithSortAndListButtons() {
+        setupToolbar(true, true);
     }
 
     /**
      * Updates title bar and home buttons (state and icon).
      */
     protected void updateActionBarTitleAndHomeButton(OCFile chosenFile) {
-        String title = ThemeUtils.getDefaultDisplayNameForRootFolder(this);    // default
-        boolean inRoot;
+        String title;
+        boolean isRoot = isRoot(chosenFile);
 
-        // choose the appropriate title
-        inRoot =  chosenFile == null ||
-                        (chosenFile.isFolder() && chosenFile.getParentId() == FileDataStorageManager.ROOT_PARENT_ID);
-        if (!inRoot) {
-            title = chosenFile.getFileName();
-        }
-
+        title = isRoot ? ThemeUtils.getDefaultDisplayNameForRootFolder(this) : chosenFile.getFileName();
         updateActionBarTitleAndHomeButtonByString(title);
+
+        if (mAppBar != null) {
+            showHomeSearchToolbar(title, isRoot);
+        }
+    }
+
+    public void showSearchView() {
+        if (isHomeSearchToolbarShow) {
+            showHomeSearchToolbar(false);
+        }
+    }
+
+    public void hideSearchView(OCFile chosenFile) {
+        if (isHomeSearchToolbarShow) {
+            showHomeSearchToolbar(isRoot(chosenFile));
+        }
+    }
+
+    private void showHomeSearchToolbar(String title, boolean isRoot) {
+        showHomeSearchToolbar(isHomeSearchToolbarShow && isRoot);
+        mSearchText.setText(getString(R.string.appbar_search_in, title));
+    }
+
+    @SuppressLint("PrivateResource")
+    private void showHomeSearchToolbar(boolean isShow) {
+        if (isShow) {
+            mAppBar.setStateListAnimator(AnimatorInflater.loadStateListAnimator(mAppBar.getContext(),
+                                                                                R.animator.appbar_elevation_off));
+            mDefaultToolbar.setVisibility(View.GONE);
+            mHomeSearchToolbar.setVisibility(View.VISIBLE);
+            ThemeToolbarUtils.colorStatusBar(this, ContextCompat.getColor(this, R.color.bg_default));
+        } else {
+            mAppBar.setStateListAnimator(AnimatorInflater.loadStateListAnimator(mAppBar.getContext(),
+                                                                                R.animator.appbar_elevation_on));
+            mDefaultToolbar.setVisibility(View.VISIBLE);
+            mHomeSearchToolbar.setVisibility(View.GONE);
+            ThemeToolbarUtils.colorStatusBar(this);
+        }
     }
 
     /**
@@ -128,17 +188,11 @@ public abstract class ToolbarActivity extends BaseActivity {
 
         // set & color the chosen title
         ActionBar actionBar = getSupportActionBar();
-        ThemeUtils.setColoredTitle(actionBar, titleToSet, this);
+        ThemeToolbarUtils.setColoredTitle(actionBar, titleToSet, this);
 
         // set home button properties
         if (actionBar != null) {
-            actionBar.setDisplayHomeAsUpEnabled(true);
             actionBar.setDisplayShowTitleEnabled(true);
-        }
-
-        Toolbar toolbar = findViewById(R.id.toolbar);
-        if (toolbar != null && toolbar.getNavigationIcon() != null) {
-            ThemeUtils.tintDrawable(toolbar.getNavigationIcon(), ThemeUtils.fontColor(this));
         }
     }
 
@@ -169,37 +223,24 @@ public abstract class ToolbarActivity extends BaseActivity {
         mInfoBox.setVisibility(View.GONE);
     }
 
-    /**
-     * Change the indeterminate mode for the toolbar's progress bar.
-     *
-     * @param indeterminate <code>true</code> to enable the indeterminate mode
-     */
-    public void setIndeterminate(boolean indeterminate) {
-        if (mProgressBar != null) {
-            mProgressBar.setIndeterminate(indeterminate);
+    public void setPreviewImageVisibility(boolean isVisibility) {
+        if (mPreviewImage != null && mPreviewImageContainer != null) {
+            if (isVisibility) {
+                mToolbar.setTitle(null);
+                mToolbar.setBackgroundColor(Color.TRANSPARENT);
+            } else {
+                mToolbar.setBackgroundResource(R.color.appbar);
+            }
+            mPreviewImageContainer.setVisibility(isVisibility ? View.VISIBLE : View.GONE);
         }
     }
 
-    /**
-     * Change the visibility for the toolbar's progress bar.
-     *
-     * @param visibility visibility of the progress bar
-     */
-    public void setProgressBarVisibility(int visibility) {
-        if (mProgressBar != null) {
-            mProgressBar.setVisibility(visibility);
-        }
+    public void hidePreviewImage() {
+        setPreviewImageVisibility(false);
     }
 
-    /**
-     * Change the visibility for the toolbar's preview image.
-     *
-     * @param visibility visibility of the preview image
-     */
-    public void setPreviewImageVisibility(int visibility) {
-        if (mPreviewImage != null) {
-            mPreviewImage.setVisibility(visibility);
-        }
+    public void showSortListGroup(boolean show) {
+        findViewById(R.id.sort_list_button_group).setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
     /**
@@ -210,6 +251,7 @@ public abstract class ToolbarActivity extends BaseActivity {
     public void setPreviewImageBitmap(Bitmap bitmap) {
         if (mPreviewImage != null) {
             mPreviewImage.setImageBitmap(bitmap);
+            setPreviewImageVisibility(true);
         }
     }
 
@@ -221,6 +263,7 @@ public abstract class ToolbarActivity extends BaseActivity {
     public void setPreviewImageDrawable(Drawable drawable) {
         if (mPreviewImage != null) {
             mPreviewImage.setImageDrawable(drawable);
+            setPreviewImageVisibility(true);
         }
     }
 
@@ -228,17 +271,10 @@ public abstract class ToolbarActivity extends BaseActivity {
      * get the toolbar's preview image view.
      */
     public ImageView getPreviewImageView() {
-            return mPreviewImage;
+        return mPreviewImage;
     }
 
-    /**
-     * Set the background to to progress bar of the toolbar. The resource should refer to
-     * a Drawable object or 0 to remove the background.#
-     *
-     * @param color The identifier of the color.
-     */
-    public void setProgressBarBackgroundColor(@ColorInt int color) {
-        mProgressBar.setBackgroundColor(color);
-        mProgressBar.getProgressDrawable().setColorFilter(color, PorterDuff.Mode.SRC_IN);
+    public FrameLayout getPreviewImageContainer() {
+        return mPreviewImageContainer;
     }
 }

@@ -35,11 +35,11 @@ public interface AppPreferences {
     /**
      * Preferences listener. Callbacks should be invoked on main thread.
      *
-     * Miantainers should extend this interface with callbacks for specific
+     * Maintainers should extend this interface with callbacks for specific
      * events.
      */
     interface Listener {
-        default void onDarkThemeEnabledChanged(boolean enabled) {
+        default void onDarkThemeModeChanged(DarkMode mode) {
             /* default empty implementation */
         };
     }
@@ -138,10 +138,10 @@ public interface AppPreferences {
     /**
      * Set preferred folder display type.
      *
-     * @param folder Folder
-     * @param layout_name preference value
+     * @param folder Folder which layout is being set or null for root folder
+     * @param layoutName preference value
      */
-    void setFolderLayout(OCFile folder, String layout_name);
+    void setFolderLayout(@Nullable OCFile folder, String layoutName);
 
     /**
      * Saves the path where the user selected to do the last upload of a file shared from other app.
@@ -213,16 +213,18 @@ public interface AppPreferences {
     /**
      * Get preferred folder sort order.
      *
+     * @param folder Folder whoch order is being retrieved or null for root folder
      * @return sort order     the sort order, default is {@link FileSortOrder#sort_a_to_z} (sort by name)
      */
-    FileSortOrder getSortOrderByFolder(OCFile folder);
+    FileSortOrder getSortOrderByFolder(@Nullable OCFile folder);
 
     /**
      * Set preferred folder sort order.
      *
-     * @param sortOrder the sort order
+     * @param folder Folder which sort order is changed; if null, root folder is assumed
+     * @param sortOrder the sort order of a folder
      */
-    void setSortOrder(OCFile folder, FileSortOrder sortOrder);
+    void setSortOrder(@Nullable OCFile folder, FileSortOrder sortOrder);
 
     /**
      * Set preferred folder sort order.
@@ -274,18 +276,18 @@ public interface AppPreferences {
     int getUploaderBehaviour();
 
     /**
-     * Enable dark theme.
+     * Changes dark theme mode
      *
      * This is reactive property. Listeners will be invoked if registered.
      *
-     * @param enabled true to turn dark theme on, false to turn it off
+     * @param mode dark mode setting: on, off, system
      */
-    void setDarkThemeEnabled(boolean enabled);
+    void setDarkThemeMode(DarkMode mode);
 
     /**
-     * @return true if application uses dark UI theme, false otherwise
+     * @return dark mode setting: on, off, system
      */
-    boolean isDarkThemeEnabled();
+    DarkMode getDarkThemeMode();
 
     /**
      * Saves the uploader behavior which the user has set last.
@@ -327,9 +329,14 @@ public interface AppPreferences {
 
     void setStoragePath(String path);
 
+    void setStoragePathValid();
+
+    boolean isStoragePathValid();
+
     void removeKeysMigrationPreference();
 
     String getCurrentAccountName();
+
     void setCurrentAccountName(String accountName);
 
     /**
@@ -348,4 +355,10 @@ public interface AppPreferences {
     boolean isPowerCheckDisabled();
 
     void setPowerCheckDisabled(boolean value);
+
+    void increasePinWrongAttempts();
+
+    void resetPinWrongAttempts();
+
+    int pinBruteForceDelay();
 }

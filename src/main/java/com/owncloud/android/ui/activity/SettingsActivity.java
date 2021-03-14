@@ -25,7 +25,6 @@
  */
 package com.owncloud.android.ui.activity;
 
-import android.accounts.Account;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -33,7 +32,6 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.Configuration;
 import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -49,15 +47,17 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.webkit.URLUtil;
 
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
 import com.nextcloud.client.di.Injectable;
 import com.nextcloud.client.etm.EtmActivity;
 import com.nextcloud.client.logger.ui.LogsActivity;
+import com.nextcloud.client.network.ClientFactory;
 import com.nextcloud.client.preferences.AppPreferences;
 import com.nextcloud.client.preferences.AppPreferencesImpl;
+import com.nextcloud.client.preferences.DarkMode;
 import com.owncloud.android.BuildConfig;
 import com.owncloud.android.MainApp;
 import com.owncloud.android.R;
@@ -69,26 +69,31 @@ import com.owncloud.android.datastorage.DataStorageProvider;
 import com.owncloud.android.datastorage.StoragePoint;
 import com.owncloud.android.lib.common.ExternalLink;
 import com.owncloud.android.lib.common.ExternalLinkType;
-import com.owncloud.android.lib.common.OwnCloudAccount;
-import com.owncloud.android.lib.common.OwnCloudClientManagerFactory;
 import com.owncloud.android.lib.common.utils.Log_OC;
+import com.owncloud.android.providers.DocumentsStorageProvider;
 import com.owncloud.android.ui.asynctasks.LoadingVersionNumberTask;
 import com.owncloud.android.utils.DeviceCredentialUtils;
 import com.owncloud.android.utils.DisplayUtils;
 import com.owncloud.android.utils.EncryptionUtils;
 import com.owncloud.android.utils.MimeTypeUtil;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeButtonUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
+import com.owncloud.android.utils.theme.ThemeTextUtils;
+import com.owncloud.android.utils.theme.ThemeToolbarUtils;
+import com.owncloud.android.utils.theme.ThemeUtils;
 
 import java.util.ArrayList;
+import java.util.List;
 
 import javax.inject.Inject;
 
 import androidx.annotation.LayoutRes;
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
+import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatDelegate;
-import androidx.core.content.res.ResourcesCompat;
 
 /**
  * An Activity that allows the user to change the application's settings.
@@ -106,6 +111,7 @@ public class SettingsActivity extends ThemedPreferenceActivity
     public static final String LOCK_NONE = "none";
     public static final String LOCK_PASSCODE = "passcode";
     public static final String LOCK_DEVICE_CREDENTIALS = "device_credentials";
+
 
     public final static String PREFERENCE_USE_FINGERPRINT = "use_fingerprint";
     public static final String PREFERENCE_SHOW_MEDIA_SCAN_NOTIFICATIONS = "show_media_scan_notifications";
@@ -130,10 +136,11 @@ public class SettingsActivity extends ThemedPreferenceActivity
     private String storagePath;
     private String pendingLock;
 
-    private Account account;
+    private User user;
     @Inject ArbitraryDataProvider arbitraryDataProvider;
     @Inject AppPreferences preferences;
     @Inject UserAccountManager accountManager;
+    @Inject ClientFactory clientFactory;
 
     @SuppressWarnings("deprecation")
     @Override
@@ -152,11 +159,11 @@ public class SettingsActivity extends ThemedPreferenceActivity
         // Register context menu for list of preferences.
         registerForContextMenu(getListView());
 
-        int accentColor = ThemeUtils.primaryAccentColor(this);
+        int accentColor = ThemeColorUtils.primaryAccentColor(this);
         String appVersion = getAppVersion();
         PreferenceScreen preferenceScreen = (PreferenceScreen) findPreference("preference_screen");
 
-        account = accountManager.getCurrentAccount();
+        user = accountManager.getUser();
 
         // retrieve user's base uri
         setupBaseUri();
@@ -185,8 +192,8 @@ public class SettingsActivity extends ThemedPreferenceActivity
         PreferenceCategory preferenceCategoryDev = (PreferenceCategory) findPreference("dev_category");
 
         if (getResources().getBoolean(R.bool.is_beta)) {
-            preferenceCategoryDev.setTitle(ThemeUtils.getColoredTitle(getString(R.string.prefs_category_dev),
-                    accentColor));
+            preferenceCategoryDev.setTitle(ThemeTextUtils.getColoredTitle(getString(R.string.prefs_category_dev),
+                                                                          accentColor));
 
             /* Link to dev apks */
             Preference pDevLink = findPreference("dev_link");
@@ -225,8 +232,8 @@ public class SettingsActivity extends ThemedPreferenceActivity
 
     private void setupAboutCategory(int accentColor, String appVersion) {
         PreferenceCategory preferenceCategoryAbout = (PreferenceCategory) findPreference("about");
-        preferenceCategoryAbout.setTitle(ThemeUtils.getColoredTitle(getString(R.string.prefs_category_about),
-                accentColor));
+        preferenceCategoryAbout.setTitle(ThemeTextUtils.getColoredTitle(getString(R.string.prefs_category_about),
+                                                                        accentColor));
 
         /* About App */
         Preference pAboutApp = findPreference("about_app");
@@ -311,8 +318,10 @@ public class SettingsActivity extends ThemedPreferenceActivity
 
     private void setupMoreCategory(int accentColor) {
         PreferenceCategory preferenceCategoryMore = (PreferenceCategory) findPreference("more");
-        preferenceCategoryMore.setTitle(ThemeUtils.getColoredTitle(getString(R.string.prefs_category_more),
-                accentColor));
+        preferenceCategoryMore.setTitle(ThemeTextUtils.getColoredTitle(getString(R.string.prefs_category_more),
+                                                                       accentColor));
+
+        setupAutoUploadPreference(preferenceCategoryMore);
 
         setupCalendarPreference(preferenceCategoryMore);
 
@@ -408,7 +417,7 @@ public class SettingsActivity extends ThemedPreferenceActivity
     }
 
     private void setupE2EMnemonicPreference(PreferenceCategory preferenceCategoryMore) {
-        String mnemonic = arbitraryDataProvider.getValue(account.name, EncryptionUtils.MNEMONIC);
+        String mnemonic = arbitraryDataProvider.getValue(user.getAccountName(), EncryptionUtils.MNEMONIC);
 
         Preference pMnemonic = findPreference("mnemonic");
         if (pMnemonic != null) {
@@ -452,6 +461,19 @@ public class SettingsActivity extends ThemedPreferenceActivity
         }
     }
 
+    private void setupAutoUploadPreference(PreferenceCategory preferenceCategoryMore) {
+        Preference autoUpload = findPreference("syncedFolders");
+        if (getResources().getBoolean(R.bool.syncedFolder_light)) {
+            preferenceCategoryMore.removePreference(autoUpload);
+        } else {
+            autoUpload.setOnPreferenceClickListener(preference -> {
+                Intent intent = new Intent(this, SyncedFoldersActivity.class);
+                startActivity(intent);
+                return true;
+            });
+        }
+    }
+
     private void setupContactsBackupPreference(PreferenceCategory preferenceCategoryMore) {
         boolean contactsBackupEnabled = !getResources().getBoolean(R.bool.show_drawer_contacts_backup)
                 && getResources().getBoolean(R.bool.contacts_backup);
@@ -459,9 +481,7 @@ public class SettingsActivity extends ThemedPreferenceActivity
         if (pContactsBackup != null) {
             if (contactsBackupEnabled) {
                 pContactsBackup.setOnPreferenceClickListener(preference -> {
-                    Intent contactsIntent = new Intent(getApplicationContext(), ContactsPreferenceActivity.class);
-                    contactsIntent.putExtra(ContactsPreferenceActivity.EXTRA_SHOW_SIDEBAR, false);
-                    startActivity(contactsIntent);
+                    ContactsPreferenceActivity.startActivityWithoutSidebar(this);
                     return true;
                 });
             } else {
@@ -496,8 +516,8 @@ public class SettingsActivity extends ThemedPreferenceActivity
 
     private void setupDetailsCategory(int accentColor, PreferenceScreen preferenceScreen) {
         PreferenceCategory preferenceCategoryDetails = (PreferenceCategory) findPreference("details");
-        preferenceCategoryDetails.setTitle(ThemeUtils.getColoredTitle(getString(R.string.prefs_category_details),
-                accentColor));
+        preferenceCategoryDetails.setTitle(ThemeTextUtils.getColoredTitle(getString(R.string.prefs_category_details),
+                                                                          accentColor));
 
         boolean fPassCodeEnabled = getResources().getBoolean(R.bool.passcode_enabled);
         boolean fDeviceCredentialsEnabled = getResources().getBoolean(R.bool.device_credentials_enabled);
@@ -592,8 +612,8 @@ public class SettingsActivity extends ThemedPreferenceActivity
     private void setupAutoUploadCategory(int accentColor, PreferenceScreen preferenceScreen) {
         PreferenceCategory preferenceCategorySyncedFolders =
                 (PreferenceCategory) findPreference("synced_folders_category");
-        preferenceCategorySyncedFolders.setTitle(ThemeUtils.getColoredTitle(getString(R.string.drawer_synced_folders),
-                accentColor));
+        preferenceCategorySyncedFolders.setTitle(ThemeTextUtils.getColoredTitle(getString(R.string.drawer_synced_folders),
+                                                                                accentColor));
 
         if (!getResources().getBoolean(R.bool.syncedFolder_light)) {
             preferenceScreen.removePreference(preferenceCategorySyncedFolders);
@@ -603,11 +623,11 @@ public class SettingsActivity extends ThemedPreferenceActivity
 
             final SwitchPreference pUploadOnWifiCheckbox = (SwitchPreference) findPreference("synced_folder_on_wifi");
             pUploadOnWifiCheckbox.setChecked(
-                    arbitraryDataProvider.getBooleanValue(account, SYNCED_FOLDER_LIGHT_UPLOAD_ON_WIFI));
+                arbitraryDataProvider.getBooleanValue(user, SYNCED_FOLDER_LIGHT_UPLOAD_ON_WIFI));
 
             pUploadOnWifiCheckbox.setOnPreferenceClickListener(preference -> {
-                arbitraryDataProvider.storeOrUpdateKeyValue(account.name, SYNCED_FOLDER_LIGHT_UPLOAD_ON_WIFI,
-                        String.valueOf(pUploadOnWifiCheckbox.isChecked()));
+                arbitraryDataProvider.storeOrUpdateKeyValue(user.getAccountName(), SYNCED_FOLDER_LIGHT_UPLOAD_ON_WIFI,
+                                                            String.valueOf(pUploadOnWifiCheckbox.isChecked()));
 
                 return true;
             });
@@ -617,9 +637,8 @@ public class SettingsActivity extends ThemedPreferenceActivity
                 if (getResources().getBoolean(R.bool.syncedFolder_light)
                         && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     pSyncedFolder.setOnPreferenceClickListener(preference -> {
-                        Intent syncedFoldersIntent = new Intent(getApplicationContext(), SyncedFoldersActivity.class);
-                        syncedFoldersIntent.putExtra(SyncedFoldersActivity.EXTRA_SHOW_SIDEBAR, false);
-                        startActivity(syncedFoldersIntent);
+                        Intent intent = new Intent(this, SyncedFoldersActivity.class);
+                        startActivity(intent);
                         return true;
                     });
                 } else {
@@ -641,10 +660,15 @@ public class SettingsActivity extends ThemedPreferenceActivity
                 DisplayUtils.showSnackMessage(this, R.string.prefs_lock_device_credentials_not_setup);
             } else {
                 DisplayUtils.showSnackMessage(this, R.string.prefs_lock_device_credentials_enabled);
-                this.lock.setValue(LOCK_DEVICE_CREDENTIALS);
-                this.lock.setSummary(this.lock.getEntry());
+                changeLockSetting(LOCK_DEVICE_CREDENTIALS);
             }
         }
+    }
+
+    private void changeLockSetting(String value) {
+        lock.setValue(value);
+        lock.setSummary(lock.getEntry());
+        DocumentsStorageProvider.notifyRootsChanged(this);
     }
 
     private void disableLock(String lock) {
@@ -660,8 +684,8 @@ public class SettingsActivity extends ThemedPreferenceActivity
 
     private void setupGeneralCategory(int accentColor) {
         PreferenceCategory preferenceCategoryGeneral = (PreferenceCategory) findPreference("general");
-        preferenceCategoryGeneral.setTitle(ThemeUtils.getColoredTitle(getString(R.string.prefs_category_general),
-                accentColor));
+        preferenceCategoryGeneral.setTitle(ThemeTextUtils.getColoredTitle(getString(R.string.prefs_category_general),
+                                                                          accentColor));
 
         prefStoragePath = (ListPreference) findPreference(AppPreferencesImpl.STORAGE_PATH);
         if (prefStoragePath != null) {
@@ -692,13 +716,31 @@ public class SettingsActivity extends ThemedPreferenceActivity
 
         loadStoragePath();
 
-        SwitchPreference themePref = (SwitchPreference) findPreference("dark_theme_enabled");
-        boolean darkThemeEnabled = preferences.isDarkThemeEnabled();
-        int summaryResId = darkThemeEnabled ? R.string.prefs_value_theme_dark : R.string.prefs_value_theme_light;
-        themePref.setSummary(summaryResId);
+        ListPreference themePref = (ListPreference) findPreference("darkMode");
+
+        List<String> themeEntries = new ArrayList<>(3);
+        themeEntries.add(getString(R.string.prefs_value_theme_light));
+        themeEntries.add(getString(R.string.prefs_value_theme_dark));
+        themeEntries.add(getString(R.string.prefs_value_theme_system));
+
+        List<String> themeValues = new ArrayList<>(3);
+        themeValues.add(DarkMode.LIGHT.name());
+        themeValues.add(DarkMode.DARK.name());
+        themeValues.add(DarkMode.SYSTEM.name());
+
+        themePref.setEntries(themeEntries.toArray(new String[0]));
+        themePref.setEntryValues(themeValues.toArray(new String[0]));
+
+        if (TextUtils.isEmpty(themePref.getEntry())) {
+            themePref.setValue(DarkMode.SYSTEM.name());
+            themePref.setSummary(TextUtils.isEmpty(themePref.getEntry()) ? DarkMode.SYSTEM.name() : themePref.getEntry());
+        }
+
         themePref.setOnPreferenceChangeListener((preference, newValue) -> {
-            boolean enabled = (Boolean)newValue;
-            MainApp.setAppTheme(enabled);
+            DarkMode mode = DarkMode.valueOf((String) newValue);
+            preferences.setDarkThemeMode(mode);
+            MainApp.setAppTheme(mode);
+
             return true;
         });
     }
@@ -725,30 +767,12 @@ public class SettingsActivity extends ThemedPreferenceActivity
         ActionBar actionBar = getDelegate().getSupportActionBar();
 
         if (actionBar != null) {
+            ThemeToolbarUtils.setColoredTitle(actionBar, getString(R.string.actionbar_settings), this);
+            ThemeToolbarUtils.colorStatusBar(this);
+            actionBar.setBackgroundDrawable(new ColorDrawable(ThemeColorUtils.primaryAppbarColor(this)));
+
             actionBar.setDisplayHomeAsUpEnabled(true);
-            ThemeUtils.setColoredTitle(actionBar, getString(R.string.actionbar_settings), this);
-            actionBar.setBackgroundDrawable(new ColorDrawable(ThemeUtils.primaryColor(this)));
-
-            Drawable backArrow = getResources().getDrawable(R.drawable.ic_arrow_back);
-            actionBar.setHomeAsUpIndicator(ThemeUtils.tintDrawable(backArrow, ThemeUtils.fontColor(this)));
-        }
-
-        Window window = getWindow();
-        if (window != null) {
-            window.getDecorView().setBackgroundDrawable(new ColorDrawable(ResourcesCompat
-                    .getColor(getResources(), R.color.bg_default, null)));
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                window.setStatusBarColor(ThemeUtils.primaryColor(this));
-            }
-
-            // For adding content description tag to a title field in the action bar
-            int actionBarTitleId = getResources().getIdentifier("action_bar_title", "id", "android");
-            View actionBarTitle = window.getDecorView().findViewById(actionBarTitleId);
-
-            if (actionBarTitle != null) {
-                actionBarTitle.setContentDescription(getString(R.string.actionbar_settings));
-            }
+            ThemeToolbarUtils.tintBackButton(actionBar, this);
         }
     }
 
@@ -764,7 +788,7 @@ public class SettingsActivity extends ThemedPreferenceActivity
                 davDroidLoginIntent.setData(Uri.parse(serverBaseUri.toString() + AuthenticatorActivity.WEB_LOGIN));
                 davDroidLoginIntent.putExtra("davPath", DAV_PATH);
             }
-            davDroidLoginIntent.putExtra("username", UserAccountManager.getUsername(account));
+            davDroidLoginIntent.putExtra("username", UserAccountManager.getUsername(user.toPlatformAccount()));
 
             startActivityForResult(davDroidLoginIntent, ACTION_REQUEST_CODE_DAVDROID_SETUP);
         } else {
@@ -789,9 +813,7 @@ public class SettingsActivity extends ThemedPreferenceActivity
         // retrieve and set user's base URI
         Thread t = new Thread(() -> {
             try {
-                OwnCloudAccount ocAccount = new OwnCloudAccount(account, MainApp.getAppContext());
-                serverBaseUri = OwnCloudClientManagerFactory.getDefaultSingleton().getClientFor(ocAccount,
-                        getApplicationContext()).getBaseUri();
+                serverBaseUri = clientFactory.create(user).getBaseUri();
             } catch (Exception e) {
                 Log_OC.e(TAG, "Error retrieving user's base URI", e);
             }
@@ -821,14 +843,12 @@ public class SettingsActivity extends ThemedPreferenceActivity
                     appPrefs.putString(PassCodeActivity.PREFERENCE_PASSCODE_D + i, passcode.substring(i - 1, i));
                 }
                 appPrefs.apply();
-                lock.setValue(LOCK_PASSCODE);
-                lock.setSummary(lock.getEntry());
+                changeLockSetting(LOCK_PASSCODE);
                 DisplayUtils.showSnackMessage(this, R.string.pass_code_stored);
             }
         } else if (requestCode == ACTION_CONFIRM_PASSCODE && resultCode == RESULT_OK) {
             if (data.getBooleanExtra(PassCodeActivity.KEY_CHECK_RESULT, false)) {
-                lock.setValue(LOCK_NONE);
-                lock.setSummary(lock.getEntry());
+                changeLockSetting(LOCK_NONE);
 
                 DisplayUtils.showSnackMessage(this, R.string.pass_code_removed);
                 if (!LOCK_NONE.equals(pendingLock)) {
@@ -842,32 +862,37 @@ public class SettingsActivity extends ThemedPreferenceActivity
                 data.getIntExtra(RequestCredentialsActivity.KEY_CHECK_RESULT,
                         RequestCredentialsActivity.KEY_CHECK_RESULT_FALSE) ==
                         RequestCredentialsActivity.KEY_CHECK_RESULT_TRUE) {
-            lock.setValue(LOCK_NONE);
-            lock.setSummary(lock.getEntry());
+            changeLockSetting(LOCK_NONE);
             DisplayUtils.showSnackMessage(this, R.string.credentials_disabled);
             if (!LOCK_NONE.equals(pendingLock)) {
                 enableLock(pendingLock);
             }
         } else if (requestCode == PassCodeManager.PASSCODE_ACTIVITY && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (data == null) {
-                DisplayUtils.showSnackMessage(this, "Error retrieving mnemonic!");
-            } else {
-                if (data.getIntExtra(RequestCredentialsActivity.KEY_CHECK_RESULT,
-                        RequestCredentialsActivity.KEY_CHECK_RESULT_FALSE) ==
-                        RequestCredentialsActivity.KEY_CHECK_RESULT_TRUE) {
+            handleMnemonicRequest(data);
+        }
+    }
 
-                    ArbitraryDataProvider arbitraryDataProvider = new ArbitraryDataProvider(getContentResolver());
-                    String mnemonic = arbitraryDataProvider.getValue(account.name, EncryptionUtils.MNEMONIC);
+    @RequiresApi(api = Build.VERSION_CODES.M)
+    @VisibleForTesting
+    public void handleMnemonicRequest(Intent data) {
+        if (data == null) {
+            DisplayUtils.showSnackMessage(this, "Error retrieving mnemonic!");
+        } else {
+            if (data.getIntExtra(RequestCredentialsActivity.KEY_CHECK_RESULT,
+                                 RequestCredentialsActivity.KEY_CHECK_RESULT_FALSE) ==
+                RequestCredentialsActivity.KEY_CHECK_RESULT_TRUE) {
 
-                    int accentColor = ThemeUtils.primaryAccentColor(this);
+                ArbitraryDataProvider arbitraryDataProvider = new ArbitraryDataProvider(getContentResolver());
+                String mnemonic = arbitraryDataProvider.getValue(user.getAccountName(), EncryptionUtils.MNEMONIC);
 
-                    AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.FallbackTheming_Dialog);
-                    builder.setTitle(ThemeUtils.getColoredTitle(getString(R.string.prefs_e2e_mnemonic), accentColor));
-                    builder.setMessage(mnemonic);
-                    builder.setPositiveButton(ThemeUtils.getColoredTitle(getString(R.string.common_ok), accentColor),
-                        (dialog, which) -> dialog.dismiss());
-                    builder.show();
-                }
+                AlertDialog.Builder builder = new AlertDialog.Builder(this, R.style.FallbackTheming_Dialog);
+                AlertDialog alertDialog = builder.setTitle(R.string.prefs_e2e_mnemonic)
+                    .setMessage(mnemonic)
+                    .setPositiveButton(R.string.common_ok, (dialog, which) -> dialog.dismiss())
+                    .create();
+
+                alertDialog.show();
+                ThemeButtonUtils.themeBorderlessButton(alertDialog.getButton(AlertDialog.BUTTON_POSITIVE));
             }
         }
     }
@@ -911,7 +936,7 @@ public class SettingsActivity extends ThemedPreferenceActivity
     }
 
     @Override
-    public void onConfigurationChanged(Configuration newConfig) {
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         getDelegate().onConfigurationChanged(newConfig);
     }
@@ -1015,6 +1040,6 @@ public class SettingsActivity extends ThemedPreferenceActivity
 
     @Override
     public void returnVersion(Integer latestVersion) {
-        FileActivity.showDevSnackbar(this, latestVersion, true);
+        FileActivity.showDevSnackbar(this, latestVersion, true, false);
     }
 }

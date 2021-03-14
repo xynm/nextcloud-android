@@ -2,7 +2,7 @@
  * ownCloud Android client application
  *
  * @author Andy Scherzinger
- * @author Tobias Kaminsiky
+ * @author Tobias Kaminsky
  * @author Chris Narkiewicz
  * Copyright (C) 2016 ownCloud Inc.
  * Copyright (C) 2018 Andy Scherzinger
@@ -31,15 +31,14 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.Drawable;
 
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
 import com.owncloud.android.utils.BitmapUtils;
-import com.owncloud.android.utils.NextcloudServer;
 
-import java.io.UnsupportedEncodingException;
-import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
 
 /**
  * A Drawable object that draws text (1 character) on top of a circular/filled background.
@@ -65,63 +64,57 @@ public class TextDrawable extends Drawable {
      */
     private float mRadius;
 
+    private boolean bigText = false;
+
     /**
      * Create a TextDrawable with the given radius.
      *
      * @param text   the text to be rendered
-     * @param r      rgb red value
-     * @param g      rgb green value
-     * @param b      rgb blue value
+     * @param color  color
      * @param radius circle radius
      */
-    public TextDrawable(String text, int r, int g, int b, float radius) {
+    public TextDrawable(String text, BitmapUtils.Color color, float radius) {
         mRadius = radius;
         mText = text;
 
         mBackground = new Paint();
         mBackground.setStyle(Paint.Style.FILL);
         mBackground.setAntiAlias(true);
-        mBackground.setColor(Color.rgb(r, g, b));
+        mBackground.setColor(Color.argb(color.a, color.r, color.g, color.b));
 
         mTextPaint = new Paint();
         mTextPaint.setColor(Color.WHITE);
         mTextPaint.setTextSize(radius);
         mTextPaint.setAntiAlias(true);
         mTextPaint.setTextAlign(Paint.Align.CENTER);
+
+        setBounds(0, 0, (int) radius * 2, (int) radius * 2);
     }
 
     /**
-     * creates an avatar in form of a TextDrawable with the first letter of the account name in a circle with the
-     * given radius.
+     * creates an avatar in form of a TextDrawable with the first letter of the account name in a circle with the given
+     * radius.
      *
-     * @param account user account
+     * @param user        user account
      * @param radiusInDp  the circle's radius
      * @return the avatar as a TextDrawable
-     * @throws UnsupportedEncodingException if the charset is not supported when calculating the color values
-     * @throws NoSuchAlgorithmException     if the specified algorithm is not available when calculating the color values
      */
     @NonNull
-    @NextcloudServer(max = 12)
-    public static TextDrawable createAvatar(Account account, float radiusInDp) throws
-            NoSuchAlgorithmException {
-        String username = UserAccountManager.getUsername(account);
+    public static TextDrawable createAvatar(User user, float radiusInDp) {
+        String username = UserAccountManager.getDisplayName(user.toPlatformAccount());
         return createNamedAvatar(username, radiusInDp);
     }
 
     /**
-     * creates an avatar in form of a TextDrawable with the first letter of the account name in a circle with the
-     * given radius.
+     * creates an avatar in form of a TextDrawable with the first letter of the account name in a circle with the given
+     * radius.
      *
-     * @param userId      userId to use
-     * @param radiusInDp  the circle's radius
+     * @param userId     userId to use
+     * @param radiusInDp the circle's radius
      * @return the avatar as a TextDrawable
-     * @throws UnsupportedEncodingException if the charset is not supported when calculating the color values
-     * @throws NoSuchAlgorithmException     if the specified algorithm is not available when calculating the color values
      */
     @NonNull
-    @NextcloudServer(max = 12)
-    public static TextDrawable createAvatarByUserId(String userId, float radiusInDp) throws
-            NoSuchAlgorithmException {
+    public static TextDrawable createAvatarByUserId(String userId, float radiusInDp) {
         return createNamedAvatar(userId, radiusInDp);
     }
 
@@ -132,15 +125,27 @@ public class TextDrawable extends Drawable {
      * @param name       the name
      * @param radiusInDp the circle's radius
      * @return the avatar as a TextDrawable
-     * @throws NoSuchAlgorithmException     if the specified algorithm is not available when calculating the color values
      */
     @NonNull
-    public static TextDrawable createNamedAvatar(String name, float radiusInDp) throws NoSuchAlgorithmException {
-        int[] hsl = BitmapUtils.calculateHSL(name);
-        int[] rgb = BitmapUtils.HSLtoRGB(hsl[0], hsl[1], hsl[2], 1);
+    public static TextDrawable createNamedAvatar(String name, float radiusInDp) {
+        BitmapUtils.Color color = BitmapUtils.usernameToColor(name);
+        return new TextDrawable(extractCharsFromDisplayName(name), color, radiusInDp);
+    }
 
-        return new TextDrawable(name.substring(0, 1).toUpperCase(Locale.getDefault()), rgb[0], rgb[1], rgb[2],
-                radiusInDp);
+    @VisibleForTesting
+    public static String extractCharsFromDisplayName(@NonNull String displayName) {
+        if (displayName.isEmpty()) {
+            return "";
+        }
+
+        String[] nameParts = displayName.split("\\s+");
+
+        StringBuilder firstTwoLetters = new StringBuilder();
+        for (int i = 0; i < Math.min(2, nameParts.length); i++) {
+            firstTwoLetters.append(nameParts[i].substring(0, 1).toUpperCase(Locale.getDefault()));
+        }
+
+        return firstTwoLetters.toString();
     }
 
     /**
@@ -152,6 +157,11 @@ public class TextDrawable extends Drawable {
     @Override
     public void draw(@NonNull Canvas canvas) {
         canvas.drawCircle(mRadius, mRadius, mRadius, mBackground);
+
+        if (bigText) {
+            mTextPaint.setTextSize(1.8f * mRadius);
+        }
+
         canvas.drawText(mText, mRadius, mRadius - ((mTextPaint.descent() + mTextPaint.ascent()) / 2), mTextPaint);
     }
 

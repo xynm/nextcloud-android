@@ -22,7 +22,6 @@
 package com.owncloud.android;
 
 import android.Manifest;
-import android.accounts.Account;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.ActivityManager;
@@ -41,8 +40,7 @@ import android.os.StrictMode;
 import android.text.TextUtils;
 import android.view.WindowManager;
 
-import com.evernote.android.job.JobManager;
-import com.evernote.android.job.JobRequest;
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
 import com.nextcloud.client.appinfo.AppInfo;
 import com.nextcloud.client.core.Clock;
@@ -53,10 +51,12 @@ import com.nextcloud.client.errorhandling.ExceptionHandler;
 import com.nextcloud.client.jobs.BackgroundJobManager;
 import com.nextcloud.client.logger.LegacyLoggerAdapter;
 import com.nextcloud.client.logger.Logger;
+import com.nextcloud.client.migrations.MigrationsManager;
 import com.nextcloud.client.network.ConnectivityService;
 import com.nextcloud.client.onboarding.OnboardingService;
 import com.nextcloud.client.preferences.AppPreferences;
 import com.nextcloud.client.preferences.AppPreferencesImpl;
+import com.nextcloud.client.preferences.DarkMode;
 import com.owncloud.android.authentication.PassCodeManager;
 import com.owncloud.android.datamodel.ArbitraryDataProvider;
 import com.owncloud.android.datamodel.MediaFolder;
@@ -68,12 +68,9 @@ import com.owncloud.android.datamodel.ThumbnailsCacheManager;
 import com.owncloud.android.datamodel.UploadsStorageManager;
 import com.owncloud.android.datastorage.DataStorageProvider;
 import com.owncloud.android.datastorage.StoragePoint;
-import com.owncloud.android.jobs.MediaFoldersDetectionJob;
-import com.owncloud.android.jobs.NCJobCreator;
 import com.owncloud.android.lib.common.OwnCloudClientManagerFactory;
 import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.lib.resources.status.OwnCloudVersion;
-import com.owncloud.android.ui.activity.ContactsPreferenceActivity;
 import com.owncloud.android.ui.activity.SyncedFoldersActivity;
 import com.owncloud.android.ui.notifications.NotificationUtils;
 import com.owncloud.android.utils.DisplayUtils;
@@ -83,6 +80,7 @@ import com.owncloud.android.utils.ReceiversHelper;
 import com.owncloud.android.utils.SecurityUtils;
 
 import org.conscrypt.Conscrypt;
+import org.greenrobot.eventbus.EventBus;
 
 import java.lang.reflect.Method;
 import java.security.NoSuchAlgorithmException;
@@ -91,13 +89,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 import javax.inject.Inject;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.StringRes;
 import androidx.appcompat.app.AlertDialog;
@@ -116,13 +115,13 @@ import static com.owncloud.android.ui.activity.ContactsPreferenceActivity.PREFER
 
 /**
  * Main Application of the project
- *
+ * <p>
  * Contains methods to build the "static" strings. These strings were before constants in different classes
  */
 public class MainApp extends MultiDexApplication implements HasAndroidInjector {
 
-    public static final OwnCloudVersion OUTDATED_SERVER_VERSION = OwnCloudVersion.nextcloud_13;
-    public static final OwnCloudVersion MINIMUM_SUPPORTED_SERVER_VERSION = OwnCloudVersion.nextcloud_12;
+    public static final OwnCloudVersion OUTDATED_SERVER_VERSION = OwnCloudVersion.nextcloud_18;
+    public static final OwnCloudVersion MINIMUM_SUPPORTED_SERVER_VERSION = OwnCloudVersion.nextcloud_16;
 
     private static final String TAG = MainApp.class.getSimpleName();
     public static final String DOT = ".";
@@ -165,6 +164,12 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
     @Inject
     Clock clock;
 
+    @Inject
+    EventBus eventBus;
+
+    @Inject
+    MigrationsManager migrationsManager;
+
     private PassCodeManager passCodeManager;
 
     @SuppressWarnings("unused")
@@ -191,14 +196,6 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
      */
     public PowerManagementService getPowerManagementService() {
         return powerManagementService;
-    }
-
-    /**
-     * Temporary getter enabling intermediate refactoring.
-     * TODO: remove when FileSyncHelper is refactored/removed
-     */
-    public BackgroundJobManager getBackgroundJobManager() {
-        return backgroundJobManager;
     }
 
     private String getAppProcessName() {
@@ -247,7 +244,7 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
     @SuppressFBWarnings("ST")
     @Override
     public void onCreate() {
-        setAppTheme(preferences.isDarkThemeEnabled());
+        setAppTheme(preferences.getDarkThemeMode());
         super.onCreate();
 
         insertConscrypt();
@@ -256,26 +253,8 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
 
         registerActivityLifecycleCallbacks(new ActivityInjector());
 
-        Thread t = new Thread(() -> {
-            // best place, before any access to AccountManager or database
-            if (!preferences.isUserIdMigrated()) {
-                final boolean migrated = accountManager.migrateUserId();
-                preferences.setMigratedUserId(migrated);
-            }
-        });
-        t.start();
-
-        JobManager.create(this).addJobCreator(
-            new NCJobCreator(
-                getApplicationContext(),
-                accountManager,
-                preferences,
-                uploadsStorageManager,
-                connectivityService,
-                powerManagementService,
-                clock
-            )
-        );
+        int startedMigrationsCount = migrationsManager.startMigration();
+        logger.i(TAG, String.format(Locale.US, "Started %d migrations", startedMigrationsCount));
 
         new SecurityUtils();
         DisplayUtils.useCompatVectorIfNeeded();
@@ -305,27 +284,18 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
                 Log_OC.d("Debug", "Failed to disable uri exposure");
             }
         }
-        initSyncOperations(uploadsStorageManager,
+        initSyncOperations(preferences,
+                           uploadsStorageManager,
                            accountManager,
                            connectivityService,
                            powerManagementService,
                            backgroundJobManager,
                            clock);
-        initContactsBackup(accountManager);
+        initContactsBackup(accountManager, backgroundJobManager);
         notificationChannels();
 
-
-        new JobRequest.Builder(MediaFoldersDetectionJob.TAG)
-            .setPeriodic(TimeUnit.MINUTES.toMillis(15), TimeUnit.MINUTES.toMillis(5))
-            .setUpdateCurrent(true)
-            .build()
-            .schedule();
-
-        new JobRequest.Builder(MediaFoldersDetectionJob.TAG)
-            .startNow()
-            .setUpdateCurrent(false)
-            .build()
-            .schedule();
+        backgroundJobManager.scheduleMediaFoldersDetectionJob();
+        backgroundJobManager.startMediaFoldersDetectionJob();
 
         registerGlobalPassCodeProtection();
     }
@@ -334,40 +304,40 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
         registerActivityLifecycleCallbacks(new ActivityLifecycleCallbacks() {
 
             @Override
-            public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
+            public void onActivityCreated(@NonNull Activity activity, Bundle savedInstanceState) {
                 Log_OC.d(activity.getClass().getSimpleName(), "onCreate(Bundle) starting");
                 onboarding.launchActivityIfNeeded(activity);
             }
 
             @Override
-            public void onActivityStarted(Activity activity) {
+            public void onActivityStarted(@NonNull Activity activity) {
                 Log_OC.d(activity.getClass().getSimpleName(), "onStart() starting");
             }
 
             @Override
-            public void onActivityResumed(Activity activity) {
+            public void onActivityResumed(@NonNull Activity activity) {
                 Log_OC.d(activity.getClass().getSimpleName(), "onResume() starting");
                 passCodeManager.onActivityStarted(activity);
             }
 
             @Override
-            public void onActivityPaused(Activity activity) {
+            public void onActivityPaused(@NonNull Activity activity) {
                 Log_OC.d(activity.getClass().getSimpleName(), "onPause() ending");
             }
 
             @Override
-            public void onActivityStopped(Activity activity) {
+            public void onActivityStopped(@NonNull Activity activity) {
                 Log_OC.d(activity.getClass().getSimpleName(), "onStop() ending");
                 passCodeManager.onActivityStopped(activity);
             }
 
             @Override
-            public void onActivitySaveInstanceState(Activity activity, Bundle outState) {
+            public void onActivitySaveInstanceState(@NonNull Activity activity, @NonNull Bundle outState) {
                 Log_OC.d(activity.getClass().getSimpleName(), "onSaveInstanceState(Bundle) starting");
             }
 
             @Override
-            public void onActivityDestroyed(Activity activity) {
+            public void onActivityDestroyed(@NonNull Activity activity) {
                 Log_OC.d(activity.getClass().getSimpleName(), "onDestroy() ending");
             }
         });
@@ -381,13 +351,13 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
         securityKeyManager.init(this, config);
     }
 
-    public static void initContactsBackup(UserAccountManager accountManager) {
+    public static void initContactsBackup(UserAccountManager accountManager, BackgroundJobManager backgroundJobManager) {
         ArbitraryDataProvider arbitraryDataProvider = new ArbitraryDataProvider(mContext.getContentResolver());
-        Account[] accounts = accountManager.getAccounts();
+        List<User> users = accountManager.getAllUsers();
+        for (User user : users) {
+            if (arbitraryDataProvider.getBooleanValue(user, PREFERENCE_CONTACTS_AUTOMATIC_BACKUP)) {
+                backgroundJobManager.schedulePeriodicContactsBackup(user);
 
-        for (Account account : accounts) {
-            if (arbitraryDataProvider.getBooleanValue(account, PREFERENCE_CONTACTS_AUTOMATIC_BACKUP)) {
-                ContactsPreferenceActivity.startContactBackupJob(account);
             }
         }
     }
@@ -414,21 +384,30 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
     @SuppressLint("ApplySharedPref") // commit is done on purpose to write immediately
     private void fixStoragePath() {
         if (!preferences.isStoragePathFixEnabled()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                StoragePoint[] storagePoints = DataStorageProvider.getInstance().getAvailableStoragePoints();
-                String storagePath = preferences.getStoragePath("");
+            StoragePoint[] storagePoints = DataStorageProvider.getInstance().getAvailableStoragePoints();
+            String storagePath = preferences.getStoragePath("");
 
-                if (TextUtils.isEmpty(storagePath)) {
-                    if (preferences.getLastSeenVersionCode() != 0) {
-                        // We already used the app, but no storage is set - fix that!
-                        preferences.setStoragePath(Environment.getExternalStorageDirectory().getAbsolutePath());
-                        preferences.removeKeysMigrationPreference();
-                    } else {
-                        // find internal storage path that's indexable
-                        boolean set = false;
+            if (TextUtils.isEmpty(storagePath)) {
+                if (preferences.getLastSeenVersionCode() != 0) {
+                    // We already used the app, but no storage is set - fix that!
+                    preferences.setStoragePath(Environment.getExternalStorageDirectory().getAbsolutePath());
+                    preferences.removeKeysMigrationPreference();
+                } else {
+                    // find internal storage path that's indexable
+                    boolean set = false;
+                    for (StoragePoint storagePoint : storagePoints) {
+                        if (storagePoint.getStorageType() == StoragePoint.StorageType.INTERNAL &&
+                            storagePoint.getPrivacyType() == StoragePoint.PrivacyType.PUBLIC) {
+                            preferences.setStoragePath(storagePoint.getPath());
+                            preferences.removeKeysMigrationPreference();
+                            set = true;
+                            break;
+                        }
+                    }
+
+                    if (!set) {
                         for (StoragePoint storagePoint : storagePoints) {
-                            if (storagePoint.getStorageType() == StoragePoint.StorageType.INTERNAL &&
-                                storagePoint.getPrivacyType() == StoragePoint.PrivacyType.PUBLIC) {
+                            if (storagePoint.getPrivacyType() == StoragePoint.PrivacyType.PUBLIC) {
                                 preferences.setStoragePath(storagePoint.getPath());
                                 preferences.removeKeysMigrationPreference();
                                 set = true;
@@ -436,27 +415,10 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
                             }
                         }
 
-                        if (!set) {
-                            for (StoragePoint storagePoint : storagePoints) {
-                                if (storagePoint.getPrivacyType() == StoragePoint.PrivacyType.PUBLIC) {
-                                    preferences.setStoragePath(storagePoint.getPath());
-                                    preferences.removeKeysMigrationPreference();
-                                    set = true;
-                                    break;
-                                }
-                            }
-
-                        }
                     }
-                    preferences.setStoragePathFixEnabled(true);
-                } else {
-                    preferences.removeKeysMigrationPreference();
-                    preferences.setStoragePathFixEnabled(true);
                 }
+                preferences.setStoragePathFixEnabled(true);
             } else {
-                if (TextUtils.isEmpty(storagePath)) {
-                    preferences.setStoragePath(Environment.getExternalStorageDirectory().getAbsolutePath());
-                }
                 preferences.removeKeysMigrationPreference();
                 preferences.setStoragePathFixEnabled(true);
             }
@@ -464,11 +426,12 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
     }
 
     public static void initSyncOperations(
+        final AppPreferences preferences,
         final UploadsStorageManager uploadsStorageManager,
         final UserAccountManager accountManager,
         final ConnectivityService connectivityService,
         final PowerManagementService powerManagementService,
-        final BackgroundJobManager jobManager,
+        final BackgroundJobManager backgroundJobManager,
         final Clock clock
     ) {
         updateToAutoUpload();
@@ -480,39 +443,38 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
                                                    Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
                 splitOutAutoUploadEntries(clock);
             } else {
-                AppPreferences preferences = AppPreferencesImpl.fromContext(getAppContext());
                 preferences.setAutoUploadSplitEntriesEnabled(true);
             }
         }
 
-        initiateExistingAutoUploadEntries(clock);
+        if (!preferences.isAutoUploadInitialized()) {
+            backgroundJobManager.startImmediateFilesSyncJob(false, false);
+            preferences.setAutoUploadInit(true);
+        }
 
-        FilesSyncHelper.scheduleFilesSyncIfNeeded(mContext, jobManager);
+        FilesSyncHelper.scheduleFilesSyncIfNeeded(mContext, backgroundJobManager);
         FilesSyncHelper.restartJobsIfNeeded(
             uploadsStorageManager,
             accountManager,
             connectivityService,
             powerManagementService);
-        FilesSyncHelper.scheduleOfflineSyncIfNeeded();
+
+        backgroundJobManager.scheduleOfflineSync();
 
         ReceiversHelper.registerNetworkChangeReceiver(uploadsStorageManager,
                                                       accountManager,
                                                       connectivityService,
                                                       powerManagementService);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-            ReceiversHelper.registerPowerChangeReceiver(uploadsStorageManager,
-                                                        accountManager,
-                                                        connectivityService,
-                                                        powerManagementService);
-        }
+        ReceiversHelper.registerPowerChangeReceiver(uploadsStorageManager,
+                                                    accountManager,
+                                                    connectivityService,
+                                                    powerManagementService);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            ReceiversHelper.registerPowerSaveReceiver(uploadsStorageManager,
-                                                      accountManager,
-                                                      connectivityService,
-                                                      powerManagementService);
-        }
+        ReceiversHelper.registerPowerSaveReceiver(uploadsStorageManager,
+                                                  accountManager,
+                                                  connectivityService,
+                                                  powerManagementService);
     }
 
     public static void notificationChannels() {
@@ -639,6 +601,7 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
         mOnlyOnDevice = state;
     }
 
+
     public static boolean isOnlyOnDevice() {
         return mOnlyOnDevice;
     }
@@ -758,25 +721,6 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
         }
     }
 
-    private static void initiateExistingAutoUploadEntries(Clock clock) {
-        new Thread(() -> {
-            AppPreferences preferences = AppPreferencesImpl.fromContext(getAppContext());
-            if (!preferences.isAutoUploadInitialized()) {
-                SyncedFolderProvider syncedFolderProvider =
-                    new SyncedFolderProvider(MainApp.getAppContext().getContentResolver(), preferences, clock);
-
-                for (SyncedFolder syncedFolder : syncedFolderProvider.getSyncedFolders()) {
-                    if (syncedFolder.isEnabled()) {
-                        FilesSyncHelper.insertAllDBEntriesForSyncedFolder(syncedFolder);
-                    }
-                }
-
-                preferences.setAutoUploadInit(true);
-            }
-
-        }).start();
-    }
-
     private static void cleanOldEntries(Clock clock) {
         // previous versions of application created broken entries in the SyncedFolderProvider
         // database, and this cleans all that and leaves 1 (newest) entry per synced folder
@@ -821,11 +765,17 @@ public class MainApp extends MultiDexApplication implements HasAndroidInjector {
     }
 
 
-    public static void setAppTheme(Boolean darkTheme) {
-        if (darkTheme) {
-            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
-        } else {
-            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO);
+    public static void setAppTheme(DarkMode mode) {
+        switch (mode) {
+            case LIGHT:
+                AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO);
+                break;
+            case DARK:
+                AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
+                break;
+            case SYSTEM:
+                AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+                break;
         }
     }
 }

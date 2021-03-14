@@ -37,7 +37,9 @@ import android.os.Process;
 import android.text.TextUtils;
 import android.util.Pair;
 
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
+import com.nextcloud.java.util.Optional;
 import com.owncloud.android.MainApp;
 import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
@@ -51,7 +53,6 @@ import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.lib.resources.files.RestoreFileVersionRemoteOperation;
 import com.owncloud.android.lib.resources.files.model.FileVersion;
 import com.owncloud.android.lib.resources.shares.ShareType;
-import com.owncloud.android.lib.resources.status.OwnCloudVersion;
 import com.owncloud.android.lib.resources.users.GetUserInfoRemoteOperation;
 import com.owncloud.android.operations.CheckCurrentCredentialsOperation;
 import com.owncloud.android.operations.CopyFileOperation;
@@ -78,6 +79,8 @@ import java.util.concurrent.ConcurrentMap;
 
 import javax.inject.Inject;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import dagger.android.AndroidInjection;
 
 public class OperationsService extends Service {
@@ -86,13 +89,10 @@ public class OperationsService extends Service {
 
     public static final String EXTRA_ACCOUNT = "ACCOUNT";
     public static final String EXTRA_SERVER_URL = "SERVER_URL";
-    public static final String EXTRA_OAUTH2_QUERY_PARAMETERS = "OAUTH2_QUERY_PARAMETERS";
     public static final String EXTRA_REMOTE_PATH = "REMOTE_PATH";
     public static final String EXTRA_NEWNAME = "NEWNAME";
     public static final String EXTRA_REMOVE_ONLY_LOCAL = "REMOVE_LOCAL_COPY";
-    public static final String EXTRA_CREATE_FULL_PATH = "CREATE_FULL_PATH";
     public static final String EXTRA_SYNC_FILE_CONTENTS = "SYNC_FILE_CONTENTS";
-    public static final String EXTRA_RESULT = "RESULT";
     public static final String EXTRA_NEW_PARENT_PATH = "NEW_PARENT_PATH";
     public static final String EXTRA_FILE = "FILE";
     public static final String EXTRA_FILE_VERSION = "FILE_VERSION";
@@ -101,18 +101,17 @@ public class OperationsService extends Service {
     public static final String EXTRA_SHARE_WITH = "SHARE_WITH";
     public static final String EXTRA_SHARE_EXPIRATION_DATE_IN_MILLIS = "SHARE_EXPIRATION_YEAR";
     public static final String EXTRA_SHARE_PERMISSIONS = "SHARE_PERMISSIONS";
-    public static final String EXTRA_SHARE_PUBLIC_UPLOAD = "SHARE_PUBLIC_UPLOAD";
+    public static final String EXTRA_SHARE_PUBLIC_LABEL = "SHARE_PUBLIC_LABEL";
     public static final String EXTRA_SHARE_HIDE_FILE_DOWNLOAD = "HIDE_FILE_DOWNLOAD";
     public static final String EXTRA_SHARE_ID = "SHARE_ID";
     public static final String EXTRA_SHARE_NOTE = "SHARE_NOTE";
     public static final String EXTRA_IN_BACKGROUND = "IN_BACKGROUND";
 
-    public static final String EXTRA_COOKIE = "COOKIE";
-
     public static final String ACTION_CREATE_SHARE_VIA_LINK = "CREATE_SHARE_VIA_LINK";
     public static final String ACTION_CREATE_SHARE_WITH_SHAREE = "CREATE_SHARE_WITH_SHAREE";
     public static final String ACTION_UNSHARE = "UNSHARE";
-    public static final String ACTION_UPDATE_SHARE = "UPDATE_SHARE";
+    public static final String ACTION_UPDATE_PUBLIC_SHARE = "UPDATE_PUBLIC_SHARE";
+    public static final String ACTION_UPDATE_USER_SHARE = "UPDATE_USER_SHARE";
     public static final String ACTION_UPDATE_SHARE_NOTE = "UPDATE_SHARE_NOTE";
     public static final String ACTION_GET_SERVER_INFO = "GET_SERVER_INFO";
     public static final String ACTION_GET_USER_NAME = "GET_USER_NAME";
@@ -125,9 +124,6 @@ public class OperationsService extends Service {
     public static final String ACTION_COPY_FILE = "COPY_FILE";
     public static final String ACTION_CHECK_CURRENT_CREDENTIALS = "CHECK_CURRENT_CREDENTIALS";
     public static final String ACTION_RESTORE_VERSION = "RESTORE_VERSION";
-
-    public static final String ACTION_OPERATION_ADDED = OperationsService.class.getName() + ".OPERATION_ADDED";
-    public static final String ACTION_OPERATION_FINISHED = OperationsService.class.getName() + ".OPERATION_FINISHED";
 
     private ServiceHandler mOperationsHandler;
     private OperationsServiceBinder mOperationsBinder;
@@ -142,12 +138,10 @@ public class OperationsService extends Service {
     private static class Target {
         public Uri mServerUrl;
         public Account mAccount;
-        public String mCookie;
 
-        public Target(Account account, Uri serverUrl, String cookie) {
+        public Target(Account account, Uri serverUrl) {
             mAccount = account;
             mServerUrl = serverUrl;
-            mCookie = cookie;
         }
     }
 
@@ -164,7 +158,7 @@ public class OperationsService extends Service {
         HandlerThread thread = new HandlerThread("Operations thread",
                 Process.THREAD_PRIORITY_BACKGROUND);
         thread.start();
-        mOperationsHandler = new ServiceHandler(thread.getLooper(), this, accountManager);
+        mOperationsHandler = new ServiceHandler(thread.getLooper(), this);
         mOperationsBinder = new OperationsServiceBinder(mOperationsHandler);
 
         // Separated worker thread for download of folders (WIP)
@@ -370,12 +364,12 @@ public class OperationsService extends Service {
          * If 'file' is a directory, returns 'true' if some of its descendant files is downloading
          * or waiting to download.
          *
-         * @param account       ownCloud account where the remote file is stored.
+         * @param user          user where the remote file is stored.
          * @param file          File to check if something is synchronizing
          *                      / downloading / uploading inside.
          */
-        public boolean isSynchronizing(Account account, OCFile file) {
-            return mSyncFolderHandler.isSynchronizing(account, file.getRemotePath());
+        public boolean isSynchronizing(User user, OCFile file) {
+            return mSyncFolderHandler.isSynchronizing(user, file.getRemotePath());
         }
 
     }
@@ -387,9 +381,7 @@ public class OperationsService extends Service {
      * Created with the Looper of a new thread, started in {@link OperationsService#onCreate()}.
      */
     private static class ServiceHandler extends Handler {
-        // don't make it a final class, and don't remove the static ; lint will warn about a p
-        // ossible memory leak
-
+        // don't make it a final class, and don't remove the static ; lint will warn about a possible memory leak
 
         OperationsService mService;
 
@@ -400,16 +392,14 @@ public class OperationsService extends Service {
         private Target mLastTarget;
         private OwnCloudClient mOwnCloudClient;
         private FileDataStorageManager mStorageManager;
-        private UserAccountManager accountManager;
 
 
-        public ServiceHandler(Looper looper, OperationsService service, UserAccountManager accountManager) {
+        public ServiceHandler(Looper looper, OperationsService service) {
             super(looper);
             if (service == null) {
                 throw new IllegalArgumentException("Received invalid NULL in parameter 'service'");
             }
             mService = service;
-            this.accountManager = accountManager;
         }
 
         @Override
@@ -433,7 +423,7 @@ public class OperationsService extends Service {
 
             if (next != null) {
                 mCurrentOperation = next.second;
-                RemoteOperationResult result = null;
+                RemoteOperationResult result;
                 try {
                     /// prepare client object to send the request to the ownCloud server
                     if (mLastTarget == null || !mLastTarget.equals(next.first)) {
@@ -442,9 +432,6 @@ public class OperationsService extends Service {
                             OwnCloudAccount ocAccount = new OwnCloudAccount(mLastTarget.mAccount, mService);
                             mOwnCloudClient = OwnCloudClientManagerFactory.getDefaultSingleton().
                                     getClientFor(ocAccount, mService);
-
-                            OwnCloudVersion version = accountManager.getServerVersion(mLastTarget.mAccount);
-                            mOwnCloudClient.setOwnCloudVersion(version);
 
                             mStorageManager = new FileDataStorageManager(
                                 mLastTarget.mAccount,
@@ -525,13 +512,9 @@ public class OperationsService extends Service {
 
             } else {
                 Account account = operationIntent.getParcelableExtra(EXTRA_ACCOUNT);
+                User user = toUser(account);
                 String serverUrl = operationIntent.getStringExtra(EXTRA_SERVER_URL);
-                String cookie = operationIntent.getStringExtra(EXTRA_COOKIE);
-                target = new Target(
-                    account,
-                        (serverUrl == null) ? null : Uri.parse(serverUrl),
-                        cookie
-                );
+                target = new Target(account, (serverUrl == null) ? null : Uri.parse(serverUrl));
 
                 String action = operationIntent.getAction();
                 String remotePath;
@@ -549,12 +532,11 @@ public class OperationsService extends Service {
                         }
                         break;
 
-                    case ACTION_UPDATE_SHARE:
-                        remotePath = operationIntent.getStringExtra(EXTRA_REMOTE_PATH);
+                    case ACTION_UPDATE_PUBLIC_SHARE:
                         shareId = operationIntent.getLongExtra(EXTRA_SHARE_ID, -1);
 
-                        if (!TextUtils.isEmpty(remotePath)) {
-                            UpdateShareViaLinkOperation updateLinkOperation = new UpdateShareViaLinkOperation(remotePath);
+                        if (shareId > 0) {
+                            UpdateShareViaLinkOperation updateLinkOperation = new UpdateShareViaLinkOperation(shareId);
 
                             password = operationIntent.getStringExtra(EXTRA_SHARE_PASSWORD);
                             updateLinkOperation.setPassword(password);
@@ -563,27 +545,32 @@ public class OperationsService extends Service {
                             updateLinkOperation.setExpirationDateInMillis(expirationDate);
 
                             boolean hideFileDownload = operationIntent.getBooleanExtra(EXTRA_SHARE_HIDE_FILE_DOWNLOAD,
-                                false);
+                                                                                       false);
                             updateLinkOperation.setHideFileDownload(hideFileDownload);
 
-                            if (operationIntent.hasExtra(EXTRA_SHARE_PUBLIC_UPLOAD)) {
-                                if (remotePath.endsWith("/")) {
-                                    updateLinkOperation.setPublicUploadOnFolder(
-                                        operationIntent.getBooleanExtra(EXTRA_SHARE_PUBLIC_UPLOAD, false));
-                                } else {
-                                    updateLinkOperation.setPublicUploadOnFile(
-                                        operationIntent.getBooleanExtra(EXTRA_SHARE_PUBLIC_UPLOAD, false));
-                                }
+//                            if (operationIntent.hasExtra(EXTRA_SHARE_PUBLIC_UPLOAD)) {
+//                                updateLinkOperation.setPublicUpload(true);
+//                            }
+
+                            if (operationIntent.hasExtra(EXTRA_SHARE_PUBLIC_LABEL)) {
+                                updateLinkOperation.setLabel(operationIntent.getStringExtra(EXTRA_SHARE_PUBLIC_LABEL));
                             }
+
                             operation = updateLinkOperation;
-                        } else if (shareId > 0) {
+                        }
+                        break;
+
+                    case ACTION_UPDATE_USER_SHARE:
+                        shareId = operationIntent.getLongExtra(EXTRA_SHARE_ID, -1);
+
+                        if (shareId > 0) {
                             UpdateSharePermissionsOperation updateShare = new UpdateSharePermissionsOperation(shareId);
 
                             int permissions = operationIntent.getIntExtra(EXTRA_SHARE_PERMISSIONS, -1);
                             updateShare.setPermissions(permissions);
 
                             long expirationDateInMillis = operationIntent
-                                    .getLongExtra(EXTRA_SHARE_EXPIRATION_DATE_IN_MILLIS, 0L);
+                                .getLongExtra(EXTRA_SHARE_EXPIRATION_DATE_IN_MILLIS, 0L);
                             updateShare.setExpirationDateInMillis(expirationDateInMillis);
 
                             password = operationIntent.getStringExtra(EXTRA_SHARE_PASSWORD);
@@ -609,17 +596,16 @@ public class OperationsService extends Service {
                         int permissions = operationIntent.getIntExtra(EXTRA_SHARE_PERMISSIONS, -1);
                         if (!TextUtils.isEmpty(remotePath)) {
                             operation = new CreateShareWithShareeOperation(remotePath, shareeName, shareType,
-                                    permissions);
+                                                                           permissions);
                         }
                         break;
 
                     case ACTION_UNSHARE:
                         remotePath = operationIntent.getStringExtra(EXTRA_REMOTE_PATH);
-                        shareType = (ShareType) operationIntent.getSerializableExtra(EXTRA_SHARE_TYPE);
-                        String shareWith = operationIntent.getStringExtra(EXTRA_SHARE_WITH);
+                        shareId = operationIntent.getLongExtra(EXTRA_SHARE_ID, -1);
 
-                        if (!TextUtils.isEmpty(remotePath)) {
-                            operation = new UnshareOperation(remotePath, shareType, shareWith, this);
+                        if (shareId > 0) {
+                            operation = new UnshareOperation(remotePath, shareId);
                         }
                         break;
 
@@ -639,33 +625,37 @@ public class OperationsService extends Service {
 
                     case ACTION_REMOVE:
                         // Remove file or folder
-                        remotePath = operationIntent.getStringExtra(EXTRA_REMOTE_PATH);
+                        OCFile file = operationIntent.getParcelableExtra(EXTRA_FILE);
                         boolean onlyLocalCopy = operationIntent.getBooleanExtra(EXTRA_REMOVE_ONLY_LOCAL, false);
                         boolean inBackground = operationIntent.getBooleanExtra(EXTRA_IN_BACKGROUND, false);
-                        operation = new RemoveFileOperation(remotePath, onlyLocalCopy, account, inBackground,
-                                getApplicationContext());
+                        operation = new RemoveFileOperation(file,
+                                                            onlyLocalCopy,
+                                                            account,
+                                                            inBackground,
+                                                            getApplicationContext());
                         break;
 
                     case ACTION_CREATE_FOLDER:
                         remotePath = operationIntent.getStringExtra(EXTRA_REMOTE_PATH);
-                        boolean createFullPath = operationIntent.getBooleanExtra(EXTRA_CREATE_FULL_PATH, true);
-                        operation = new CreateFolderOperation(remotePath, createFullPath);
+                        operation = new CreateFolderOperation(remotePath, user, getApplicationContext());
                         break;
 
                     case ACTION_SYNC_FILE:
                         remotePath = operationIntent.getStringExtra(EXTRA_REMOTE_PATH);
                         boolean syncFileContents = operationIntent.getBooleanExtra(EXTRA_SYNC_FILE_CONTENTS, true);
-                        operation = new SynchronizeFileOperation(remotePath, account, syncFileContents,
-                                getApplicationContext());
+                        operation = new SynchronizeFileOperation(remotePath,
+                                                                 user,
+                                                                 syncFileContents,
+                                                                 getApplicationContext());
                         break;
 
                     case ACTION_SYNC_FOLDER:
                         remotePath = operationIntent.getStringExtra(EXTRA_REMOTE_PATH);
                         operation = new SynchronizeFolderOperation(
-                                this,                       // TODO remove this dependency from construction time
-                                remotePath,
-                                account,
-                                System.currentTimeMillis()  // TODO remove this dependency from construction time
+                            this,                       // TODO remove this dependency from construction time
+                            remotePath,
+                            user,
+                            System.currentTimeMillis()  // TODO remove this dependency from construction time
                         );
                         break;
 
@@ -682,7 +672,7 @@ public class OperationsService extends Service {
                         break;
 
                     case ACTION_CHECK_CURRENT_CREDENTIALS:
-                    operation = new CheckCurrentCredentialsOperation(account);
+                    operation = new CheckCurrentCredentialsOperation(user);
                         break;
 
                     case ACTION_RESTORE_VERSION:
@@ -703,9 +693,26 @@ public class OperationsService extends Service {
         }
 
         if (operation != null) {
-            return new Pair<Target, RemoteOperation>(target, operation);
+            return new Pair<>(target, operation);
         } else {
             return null;
+        }
+    }
+
+    /**
+     * This is a temporary compatibility helper to convert legacy {@link Account} instance to new {@link User} model.
+     *
+     * @param account Account instance
+     * @return User model that corresponds to Account
+     */
+    @NonNull
+    private User toUser(@Nullable Account account) {
+        String accountName = account != null ? account.name : "";
+        Optional<User> optionalUser = accountManager.getUser(accountName);
+        if (optionalUser.isPresent()) {
+            return optionalUser.get();
+        } else {
+            return accountManager.getAnonymousUser();
         }
     }
 

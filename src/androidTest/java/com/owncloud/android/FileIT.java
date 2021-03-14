@@ -1,5 +1,6 @@
 package com.owncloud.android;
 
+import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.operations.CreateFolderOperation;
 import com.owncloud.android.operations.RemoveFileOperation;
@@ -17,7 +18,7 @@ import static org.junit.Assert.assertNull;
  * Tests related to file operations
  */
 @RunWith(AndroidJUnit4.class)
-public class FileIT extends AbstractIT {
+public class FileIT extends AbstractOnServerIT {
 
     @Test
     public void testCreateFolder() {
@@ -26,16 +27,17 @@ public class FileIT extends AbstractIT {
         // folder does not exist yet
         assertNull(getStorageManager().getFileByPath(path));
 
-        SyncOperation syncOp = new CreateFolderOperation(path, true);
+        SyncOperation syncOp = new CreateFolderOperation(path, user, targetContext);
         RemoteOperationResult result = syncOp.execute(client, getStorageManager());
 
         assertTrue(result.toString(), result.isSuccess());
 
         // folder exists
-        assertTrue(getStorageManager().getFileByPath(path).isFolder());
+        OCFile file = getStorageManager().getFileByPath(path);
+        assertTrue(file.isFolder());
 
         // cleanup
-        new RemoveFileOperation(path, false, account, false, targetContext).execute(client, getStorageManager());
+        new RemoveFileOperation(file, false, account, false, targetContext).execute(client, getStorageManager());
     }
 
     @Test
@@ -44,14 +46,20 @@ public class FileIT extends AbstractIT {
         // folder does not exist yet
         assertNull(getStorageManager().getFileByPath(path));
 
-        SyncOperation syncOp = new CreateFolderOperation(path, true);
+        SyncOperation syncOp = new CreateFolderOperation(path, user, targetContext);
         RemoteOperationResult result = syncOp.execute(client, getStorageManager());
         assertTrue(result.toString(), result.isSuccess());
 
         // folder exists
-        assertTrue(getStorageManager().getFileByPath(path).isFolder());
+        OCFile file = getStorageManager().getFileByPath(path);
+        assertTrue(file.isFolder());
 
         // cleanup
-        new RemoveFileOperation("/testFolder/", false, account, false, targetContext).execute(client, getStorageManager());
+        new RemoveFileOperation(file,
+                                false,
+                                account,
+                                false,
+                                targetContext)
+            .execute(client, getStorageManager());
     }
 }

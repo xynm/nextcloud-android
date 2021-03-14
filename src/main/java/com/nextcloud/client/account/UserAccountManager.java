@@ -20,10 +20,15 @@
 package com.nextcloud.client.account;
 
 import android.accounts.Account;
+import android.accounts.AccountManager;
+import android.app.Activity;
+import android.content.Intent;
 
 import com.nextcloud.java.util.Optional;
+import com.owncloud.android.MainApp;
 import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.lib.common.OwnCloudAccount;
+import com.owncloud.android.lib.common.accounts.AccountUtils;
 import com.owncloud.android.lib.resources.status.OwnCloudVersion;
 
 import java.util.List;
@@ -45,6 +50,14 @@ public interface UserAccountManager extends CurrentAccountProvider {
      * Remove all NextCloud accounts from OS account manager.
      */
     void removeAllAccounts();
+
+    /**
+     * Remove registered user.
+     *
+     * @param user user to remove
+     * @return true if account was removed successfully, false otherwise
+     */
+    boolean removeUser(User user);
 
     /**
      * Get configured NextCloud's user accounts.
@@ -70,6 +83,9 @@ public interface UserAccountManager extends CurrentAccountProvider {
     @NonNull
     Optional<User> getUser(CharSequence accountName);
 
+
+    User getAnonymousUser();
+
     /**
      * Check if Nextcloud account is registered in {@link android.accounts.AccountManager}
      *
@@ -79,7 +95,11 @@ public interface UserAccountManager extends CurrentAccountProvider {
     boolean exists(Account account);
 
     /**
-     * Verifies that every account has userId set
+     * Verifies that every account has userId set and sets the user id if not.
+     * This migration is idempotent and can be run multiple times until
+     * all accounts are migrated.
+     *
+     * @return true if migration was successful, false if any account failed to be migrated
      */
     boolean migrateUserId();
 
@@ -97,11 +117,9 @@ public interface UserAccountManager extends CurrentAccountProvider {
      * @return Version of the OC server corresponding to account, according to the data saved
      * in the system AccountManager
      */
+    @Deprecated
     @NonNull
     OwnCloudVersion getServerVersion(Account account);
-
-    boolean isSearchSupported(@Nullable Account account);
-    boolean isMediaStreamingSupported(@Nullable Account account);
 
     void resetOwnCloudAccount();
 
@@ -112,17 +130,28 @@ public interface UserAccountManager extends CurrentAccountProvider {
      * @param account account to compare
      * @return false if ownerId is not set or owner is a different account
      */
+    @Deprecated
     boolean accountOwnsFile(OCFile file, Account account);
 
     /**
-     * Extract username from account.
+     * Checks if an account owns the file (file's ownerId is the same as account name)
      *
+     * @param file File to check
+     * @param user user to check against
+     * @return false if ownerId is not set or owner is a different account
+     */
+    boolean userOwnsFile(OCFile file, User user);
+
+    /**
+     * Extract username from account.
+     * <p>
      * Full account name is in form of "username@nextcloud.domain".
      *
      * @param account Account instance
      * @return User name (without domain) or null, if name cannot be extracted.
      */
-    static String getUsername(Account account) {
+    static @Nullable
+    String getUsername(Account account) {
         if (account != null && account.name != null) {
             return account.name.substring(0, account.name.lastIndexOf('@'));
         } else {
@@ -130,4 +159,18 @@ public interface UserAccountManager extends CurrentAccountProvider {
         }
     }
 
+    static @Nullable
+    String getDisplayName(Account account) {
+        return AccountManager.get(MainApp.getAppContext()).getUserData(account,
+                                                                       AccountUtils.Constants.KEY_DISPLAY_NAME);
+    }
+
+    /**
+     * Launch account registration activity.
+     * <p>
+     * This method returns immediately. Authenticator activity will be launched asynchronously.
+     *
+     * @param activity Activity used to launch authenticator flow via {@link Activity#startActivity(Intent)}
+     */
+    void startAccountCreation(Activity activity);
 }

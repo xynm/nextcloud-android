@@ -20,7 +20,6 @@
  */
 package com.owncloud.android.ui.dialog;
 
-import android.accounts.Account;
 import android.accounts.AccountManager;
 import android.app.Dialog;
 import android.content.DialogInterface;
@@ -34,6 +33,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
 
+import com.nextcloud.client.account.User;
 import com.owncloud.android.R;
 import com.owncloud.android.datamodel.ArbitraryDataProvider;
 import com.owncloud.android.lib.common.accounts.AccountUtils;
@@ -46,7 +46,8 @@ import com.owncloud.android.lib.resources.users.SendCSROperation;
 import com.owncloud.android.lib.resources.users.StorePrivateKeyOperation;
 import com.owncloud.android.utils.CsrHelper;
 import com.owncloud.android.utils.EncryptionUtils;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeButtonUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
 
 import java.io.IOException;
 import java.security.KeyPair;
@@ -55,6 +56,7 @@ import java.util.List;
 import java.util.Locale;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.app.AlertDialog;
 import androidx.core.graphics.drawable.DrawableCompat;
 import androidx.fragment.app.DialogFragment;
@@ -70,20 +72,20 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
     public static final String SETUP_ENCRYPTION_DIALOG_TAG = "SETUP_ENCRYPTION_DIALOG_TAG";
     public static final String ARG_POSITION = "ARG_POSITION";
 
-    private static String ARG_ACCOUNT = "ARG_ACCOUNT";
-    private static String TAG = SetupEncryptionDialogFragment.class.getSimpleName();
+    private static final String ARG_USER = "ARG_USER";
+    private static final String TAG = SetupEncryptionDialogFragment.class.getSimpleName();
 
     private static final String KEY_CREATED = "KEY_CREATED";
     private static final String KEY_EXISTING_USED = "KEY_EXISTING_USED";
     private static final String KEY_FAILED = "KEY_FAILED";
     private static final String KEY_GENERATE = "KEY_GENERATE";
 
-    private Account account;
+    private User user;
     private TextView textView;
     private TextView passphraseTextView;
     private ArbitraryDataProvider arbitraryDataProvider;
     private Button positiveButton;
-    private Button negativeButton;
+    private Button neutralButton;
     private DownloadKeysAsyncTask task;
     private TextView passwordField;
     private String keyResult;
@@ -94,10 +96,10 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
      *
      * @return Dialog ready to show.
      */
-    public static SetupEncryptionDialogFragment newInstance(Account account, int position) {
+    public static SetupEncryptionDialogFragment newInstance(User user, int position) {
         SetupEncryptionDialogFragment fragment = new SetupEncryptionDialogFragment();
         Bundle args = new Bundle();
-        args.putParcelable(ARG_ACCOUNT, account);
+        args.putParcelable(ARG_USER, user);
         args.putInt(ARG_POSITION, position);
         fragment.setArguments(args);
         return fragment;
@@ -107,15 +109,12 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
     public void onStart() {
         super.onStart();
 
-        int color = ThemeUtils.primaryAccentColor(getContext());
-
         AlertDialog alertDialog = (AlertDialog) getDialog();
 
         positiveButton = alertDialog.getButton(AlertDialog.BUTTON_POSITIVE);
-        positiveButton.setTextColor(color);
-
-        negativeButton = alertDialog.getButton(AlertDialog.BUTTON_NEGATIVE);
-        negativeButton.setTextColor(color);
+        neutralButton = alertDialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        ThemeButtonUtils.themeBorderlessButton(positiveButton,
+                                               neutralButton);
 
         task = new DownloadKeysAsyncTask();
         task.execute();
@@ -124,8 +123,8 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
     @NonNull
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
-        int primaryColor = ThemeUtils.primaryColor(getContext());
-        account = getArguments().getParcelable(ARG_ACCOUNT);
+        int primaryColor = ThemeColorUtils.primaryColor(getContext());
+        user = getArguments().getParcelable(ARG_USER);
 
         arbitraryDataProvider = new ArbitraryDataProvider(getContext().getContentResolver());
 
@@ -143,15 +142,15 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
         DrawableCompat.setTint(wrappedDrawable, primaryColor);
         passwordField.setBackgroundDrawable(wrappedDrawable);
 
-        return createDialog(primaryColor, v);
+        return createDialog(v);
     }
 
     @NonNull
-    private Dialog createDialog(int accentColor, View v) {
+    private Dialog createDialog(View v) {
         AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
         builder.setView(v).setPositiveButton(R.string.common_ok, null)
-                .setNegativeButton(R.string.common_cancel, null)
-                .setTitle(ThemeUtils.getColoredTitle(getString(R.string.end_to_end_encryption_title), accentColor));
+                .setNeutralButton(R.string.common_cancel, null)
+                .setTitle(R.string.end_to_end_encryption_title);
 
         Dialog dialog = builder.create();
         dialog.setCanceledOnTouchOutside(false);
@@ -192,13 +191,13 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
                                     String decryptedPrivateKey = EncryptionUtils.decryptPrivateKey(privateKey,
                                             mnemonic);
 
-                                    arbitraryDataProvider.storeOrUpdateKeyValue(account.name,
+                                    arbitraryDataProvider.storeOrUpdateKeyValue(user.getAccountName(),
                                             EncryptionUtils.PRIVATE_KEY, decryptedPrivateKey);
 
                                     dialog.dismiss();
                                     Log_OC.d(TAG, "Private key successfully decrypted and stored");
 
-                                    arbitraryDataProvider.storeOrUpdateKeyValue(account.name, EncryptionUtils.MNEMONIC,
+                                    arbitraryDataProvider.storeOrUpdateKeyValue(user.getAccountName(), EncryptionUtils.MNEMONIC,
                                             mnemonicUnchanged);
 
                                     Intent intentExisting = new Intent();
@@ -216,10 +215,8 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
                             case KEY_GENERATE:
                                 passphraseTextView.setVisibility(View.GONE);
                                 positiveButton.setVisibility(View.GONE);
-                                negativeButton.setVisibility(View.GONE);
-                                getDialog().setTitle(ThemeUtils.getColoredTitle(getString(
-                                        R.string.end_to_end_encryption_storing_keys),
-                                        ThemeUtils.primaryColor(getContext())));
+                                neutralButton.setVisibility(View.GONE);
+                                getDialog().setTitle(R.string.end_to_end_encryption_storing_keys);
 
                                 GenerateNewKeysAsyncTask newKeysTask = new GenerateNewKeysAsyncTask();
                                 newKeysTask.execute();
@@ -236,14 +233,14 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
         return dialog;
     }
 
-    private class DownloadKeysAsyncTask extends AsyncTask<Void, Void, String> {
+    public class DownloadKeysAsyncTask extends AsyncTask<Void, Void, String> {
         @Override
         protected void onPreExecute() {
             super.onPreExecute();
 
             textView.setText(R.string.end_to_end_encryption_retrieving_keys);
             positiveButton.setVisibility(View.INVISIBLE);
-            negativeButton.setVisibility(View.INVISIBLE);
+            neutralButton.setVisibility(View.INVISIBLE);
         }
 
         @Override
@@ -254,26 +251,26 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
             //  - decrypt private key, store unencrypted private key in database
 
             GetPublicKeyOperation publicKeyOperation = new GetPublicKeyOperation();
-            RemoteOperationResult publicKeyResult = publicKeyOperation.execute(account, getContext());
+            RemoteOperationResult publicKeyResult = publicKeyOperation.execute(user.toPlatformAccount(), getContext());
 
             if (publicKeyResult.isSuccess()) {
-                Log_OC.d(TAG, "public key successful downloaded for " + account.name);
+                Log_OC.d(TAG, "public key successful downloaded for " + user.getAccountName());
 
                 String publicKeyFromServer = (String) publicKeyResult.getData().get(0);
-                arbitraryDataProvider.storeOrUpdateKeyValue(account.name, EncryptionUtils.PUBLIC_KEY,
-                        publicKeyFromServer);
+                arbitraryDataProvider.storeOrUpdateKeyValue(user.getAccountName(), EncryptionUtils.PUBLIC_KEY,
+                                                            publicKeyFromServer);
             } else {
                 return null;
             }
 
-            GetPrivateKeyOperation privateKeyOperation = new GetPrivateKeyOperation();
-            RemoteOperationResult privateKeyResult = privateKeyOperation.execute(account, getContext());
+            RemoteOperationResult<com.owncloud.android.lib.ocs.responses.PrivateKey> privateKeyResult =
+                new GetPrivateKeyOperation().execute(user.toPlatformAccount(), getContext());
 
             if (privateKeyResult.isSuccess()) {
-                Log_OC.d(TAG, "private key successful downloaded for " + account.name);
+                Log_OC.d(TAG, "private key successful downloaded for " + user.getAccountName());
 
                 keyResult = KEY_EXISTING_USED;
-                return (String) privateKeyResult.getData().get(0);
+                return privateKeyResult.getResultData().getKey();
             } else {
                 return null;
             }
@@ -286,23 +283,8 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
             if (privateKey == null) {
                 // first show info
                 try {
-                    keyWords = EncryptionUtils.getRandomWords(12, getContext());
-
-                    getDialog().setTitle(ThemeUtils.getColoredTitle(
-                            getString(R.string.end_to_end_encryption_passphrase_title),
-                            ThemeUtils.primaryColor(getContext())));
-
-                    textView.setText(R.string.end_to_end_encryption_keywords_description);
-
-                    passphraseTextView.setText(generateMnemonicString(true));
-
-                    passphraseTextView.setVisibility(View.VISIBLE);
-                    positiveButton.setText(R.string.end_to_end_encryption_confirm_button);
-                    positiveButton.setVisibility(View.VISIBLE);
-
-                    negativeButton.setVisibility(View.VISIBLE);
-
-                    keyResult = KEY_GENERATE;
+                    keyWords = EncryptionUtils.getRandomWords(12, requireContext());
+                    showMnemonicInfo();
                 } catch (IOException e) {
                     textView.setText(R.string.common_error);
                 }
@@ -316,7 +298,7 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
         }
     }
 
-    private class GenerateNewKeysAsyncTask extends AsyncTask<Void, Void, String> {
+    public class GenerateNewKeysAsyncTask extends AsyncTask<Void, Void, String> {
         @Override
         protected void onPreExecute() {
             super.onPreExecute();
@@ -337,11 +319,11 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
 
                 // create CSR
                 AccountManager accountManager = AccountManager.get(getContext());
-                String userId = accountManager.getUserData(account, AccountUtils.Constants.KEY_USER_ID);
+                String userId = accountManager.getUserData(user.toPlatformAccount(), AccountUtils.Constants.KEY_USER_ID);
                 String urlEncoded = CsrHelper.generateCsrPemEncodedString(keyPair, userId);
 
                 SendCSROperation operation = new SendCSROperation(urlEncoded);
-                RemoteOperationResult result = operation.execute(account, getContext());
+                RemoteOperationResult result = operation.execute(user.toPlatformAccount(), getContext());
 
                 if (result.isSuccess()) {
                     Log_OC.d(TAG, "public key success");
@@ -359,22 +341,23 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
 
                 // upload encryptedPrivateKey
                 StorePrivateKeyOperation storePrivateKeyOperation = new StorePrivateKeyOperation(encryptedPrivateKey);
-                RemoteOperationResult storePrivateKeyResult = storePrivateKeyOperation.execute(account, getContext());
+                RemoteOperationResult storePrivateKeyResult = storePrivateKeyOperation.execute(user.toPlatformAccount(),
+                                                                                               getContext());
 
                 if (storePrivateKeyResult.isSuccess()) {
                     Log_OC.d(TAG, "private key success");
 
-                    arbitraryDataProvider.storeOrUpdateKeyValue(account.name, EncryptionUtils.PRIVATE_KEY,
+                    arbitraryDataProvider.storeOrUpdateKeyValue(user.getAccountName(), EncryptionUtils.PRIVATE_KEY,
                             privateKeyString);
-                    arbitraryDataProvider.storeOrUpdateKeyValue(account.name, EncryptionUtils.PUBLIC_KEY, publicKey);
-                    arbitraryDataProvider.storeOrUpdateKeyValue(account.name, EncryptionUtils.MNEMONIC,
+                    arbitraryDataProvider.storeOrUpdateKeyValue(user.getAccountName(), EncryptionUtils.PUBLIC_KEY, publicKey);
+                    arbitraryDataProvider.storeOrUpdateKeyValue(user.getAccountName(), EncryptionUtils.MNEMONIC,
                             generateMnemonicString(true));
 
                     keyResult = KEY_CREATED;
                     return (String) storePrivateKeyResult.getData().get(0);
                 } else {
                     DeletePublicKeyOperation deletePublicKeyOperation = new DeletePublicKeyOperation();
-                    deletePublicKeyOperation.execute(account, getContext());
+                    deletePublicKeyOperation.execute(user.toPlatformAccount(), getContext());
                 }
             } catch (Exception e) {
                 Log_OC.e(TAG, e.getMessage());
@@ -389,21 +372,15 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
             super.onPostExecute(s);
 
             if (s.isEmpty()) {
-                keyResult = KEY_FAILED;
-
-                getDialog().setTitle(ThemeUtils.getColoredTitle(
-                        getString(R.string.common_error), ThemeUtils.primaryColor(getContext())));
-                textView.setText(R.string.end_to_end_encryption_unsuccessful);
-                positiveButton.setText(R.string.end_to_end_encryption_dialog_close);
-                positiveButton.setVisibility(View.VISIBLE);
+                errorSavingKeys();
             } else {
-                getDialog().dismiss();
+                requireDialog().dismiss();
 
                 Intent intentExisting = new Intent();
                 intentExisting.putExtra(SUCCESS, true);
-                intentExisting.putExtra(ARG_POSITION, getArguments().getInt(ARG_POSITION));
+                intentExisting.putExtra(ARG_POSITION, requireArguments().getInt(ARG_POSITION));
                 getTargetFragment().onActivityResult(getTargetRequestCode(),
-                        SETUP_ENCRYPTION_RESULT_CODE, intentExisting);
+                                                     SETUP_ENCRYPTION_RESULT_CODE, intentExisting);
             }
         }
     }
@@ -419,5 +396,39 @@ public class SetupEncryptionDialogFragment extends DialogFragment {
         }
 
         return stringBuilder.toString();
+    }
+
+    @VisibleForTesting
+    public void showMnemonicInfo() {
+        requireDialog().setTitle(R.string.end_to_end_encryption_passphrase_title);
+
+        textView.setText(R.string.end_to_end_encryption_keywords_description);
+
+        passphraseTextView.setText(generateMnemonicString(true));
+
+        passphraseTextView.setVisibility(View.VISIBLE);
+        positiveButton.setText(R.string.end_to_end_encryption_confirm_button);
+        positiveButton.setVisibility(View.VISIBLE);
+
+        neutralButton.setVisibility(View.VISIBLE);
+        ThemeButtonUtils.themeBorderlessButton(positiveButton, neutralButton);
+
+        keyResult = KEY_GENERATE;
+    }
+
+    @VisibleForTesting
+    public void errorSavingKeys() {
+        keyResult = KEY_FAILED;
+
+        requireDialog().setTitle(R.string.common_error);
+        textView.setText(R.string.end_to_end_encryption_unsuccessful);
+        positiveButton.setText(R.string.end_to_end_encryption_dialog_close);
+        positiveButton.setVisibility(View.VISIBLE);
+        positiveButton.setTextColor(ThemeColorUtils.primaryAccentColor(getContext()));
+    }
+
+    @VisibleForTesting
+    public void setMnemonic(List<String> keyWords) {
+        this.keyWords = keyWords;
     }
 }

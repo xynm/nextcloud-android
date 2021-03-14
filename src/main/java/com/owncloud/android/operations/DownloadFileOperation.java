@@ -46,20 +46,18 @@ import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import lombok.Getter;
-
 /**
  * Remote DownloadOperation performing the download of a file to an ownCloud server
  */
 public class DownloadFileOperation extends RemoteOperation {
     private static final String TAG = DownloadFileOperation.class.getSimpleName();
 
-    @Getter private Account account;
-    @Getter private OCFile file;
-    @Getter private String behaviour;
-    @Getter private String etag = "";
-    @Getter private String activityName;
-    @Getter private String packageName;
+    private Account account;
+    private OCFile file;
+    private String behaviour;
+    private String etag = "";
+    private String activityName;
+    private String packageName;
 
     private Context context;
     private Set<OnDatatransferProgressListener> dataTransferListeners = new HashSet<>();
@@ -87,10 +85,18 @@ public class DownloadFileOperation extends RemoteOperation {
         this.context = context;
     }
 
+    public DownloadFileOperation(Account account, OCFile file, Context context) {
+        this(account, file, null, null, null, context);
+    }
+
     public String getSavePath() {
         if (file.getStoragePath() != null) {
+            File parentFile = new File(file.getStoragePath()).getParentFile();
+            if (parentFile != null && !parentFile.exists()) {
+                parentFile.mkdirs();
+            }
             File path = new File(file.getStoragePath());  // re-downloads should be done over the original file
-            if (path.canWrite()) {
+            if (path.canWrite() || parentFile != null && parentFile.canWrite()) {
                 return path.getAbsolutePath();
             }
         }
@@ -119,7 +125,7 @@ public class DownloadFileOperation extends RemoteOperation {
                             file.getRemotePath().lastIndexOf('.') + 1));
             } catch (IndexOutOfBoundsException e) {
                 Log_OC.e(TAG, "Trying to find out MIME type of a file without extension: " +
-                        file.getRemotePath());
+                    file.getRemotePath());
             }
         }
         if (mimeType == null) {
@@ -165,12 +171,12 @@ public class DownloadFileOperation extends RemoteOperation {
             modificationTimestamp = downloadOperation.getModificationTimestamp();
             etag = downloadOperation.getEtag();
             newFile = new File(getSavePath());
-            if (!newFile.getParentFile().mkdirs()) {
+            if (!newFile.getParentFile().exists() && !newFile.getParentFile().mkdirs()) {
                 Log_OC.e(TAG, "Unable to create parent folder " + newFile.getParentFile().getAbsolutePath());
             }
 
             // decrypt file
-            if (file.isEncrypted() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+            if (file.isEncrypted()) {
                 FileDataStorageManager fileDataStorageManager = new FileDataStorageManager(account, context.getContentResolver());
 
                 OCFile parent = fileDataStorageManager.getFileByPath(file.getParentRemotePath());
@@ -227,5 +233,29 @@ public class DownloadFileOperation extends RemoteOperation {
         synchronized (dataTransferListeners) {
             dataTransferListeners.remove(listener);
         }
+    }
+
+    public Account getAccount() {
+        return this.account;
+    }
+
+    public OCFile getFile() {
+        return this.file;
+    }
+
+    public String getBehaviour() {
+        return this.behaviour;
+    }
+
+    public String getEtag() {
+        return this.etag;
+    }
+
+    public String getActivityName() {
+        return this.activityName;
+    }
+
+    public String getPackageName() {
+        return this.packageName;
     }
 }

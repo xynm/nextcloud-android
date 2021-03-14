@@ -16,36 +16,52 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 -->
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:fillViewport="true">
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
-    <RelativeLayout
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
         <TextView
             android:id="@+id/text_preview"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:padding="@dimen/standard_padding"
+            android:textColor="@color/text_color"
             android:textIsSelectable="true"
-            android:visibility="gone"/>
+            android:visibility="gone"
+            tools:maxLength="40"
+            tools:text="@tools:sample/lorem/random"
+            tools:visibility="visible" />
 
-        <RelativeLayout
-            android:id="@+id/multi_view"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent">
+    </ScrollView>
 
-            <ScrollView
-                android:layout_width="match_parent"
-                android:layout_height="match_parent">
+    <FrameLayout
+        android:id="@+id/empty_list_progress"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
 
-                <include layout="@layout/empty_list"/>
+        <com.elyeproj.loaderviewlibrary.LoaderImageView
+            android:layout_width="@dimen/empty_list_icon_layout_width"
+            android:layout_height="@dimen/empty_list_icon_layout_width"
+            android:layout_gravity="center"
+            android:contentDescription="@null"
+            app:corners="24" />
 
-            </ScrollView>
-        </RelativeLayout>
-    </RelativeLayout>
+        <ImageView
+            android:layout_width="@dimen/empty_list_icon_layout_width"
+            android:layout_height="@dimen/empty_list_icon_layout_height"
+            android:padding="@dimen/standard_half_padding"
+            android:layout_gravity="center"
+            android:contentDescription="@null"
+            android:src="@drawable/file_text"
+            app:tint="@color/bg_default" />
 
-</ScrollView>
+    </FrameLayout>
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

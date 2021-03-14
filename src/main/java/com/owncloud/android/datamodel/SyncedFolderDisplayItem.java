@@ -23,15 +23,10 @@ package com.owncloud.android.datamodel;
 
 import java.util.List;
 
-import lombok.Getter;
-import lombok.Setter;
-
 /**
  * Display item specialization for synced folder objects to be displayed in a list/grid view adding further
  * information to be displayed in the UI but not part of the persisted underlying {@link SyncedFolder} object.
  */
-@Getter
-@Setter
 public class SyncedFolderDisplayItem extends SyncedFolder {
     private List<String> filePaths;
     private String folderName;
@@ -45,6 +40,7 @@ public class SyncedFolderDisplayItem extends SyncedFolder {
      * @param remotePath      remote path
      * @param wifiOnly        upload on wifi only flag
      * @param chargingOnly    upload on charging only
+     * @param existing        also upload existing
      * @param subfolderByDate create sub-folders by date (month)
      * @param account         the account owning the synced folder
      * @param uploadAction    the action to be done after the upload
@@ -53,24 +49,97 @@ public class SyncedFolderDisplayItem extends SyncedFolder {
      * @param folderName      the UI info for the folder's name
      * @param numberOfFiles   the UI info for number of files within the folder
      * @param type            the type of the folder
+     * @param hidden          hide item flag
      */
-    public SyncedFolderDisplayItem(long id, String localPath, String remotePath, Boolean wifiOnly, Boolean chargingOnly,
-                                   Boolean subfolderByDate, String account, Integer uploadAction, Boolean enabled,
-                                   long timestampMs, List<String> filePaths, String folderName, long numberOfFiles,
-                                   MediaFolderType type)
-    {
-        super(id, localPath, remotePath, wifiOnly, chargingOnly, subfolderByDate, account, uploadAction, enabled,
-              timestampMs, type);
+    public SyncedFolderDisplayItem(long id,
+                                   String localPath,
+                                   String remotePath,
+                                   boolean wifiOnly,
+                                   boolean chargingOnly,
+                                   boolean existing,
+                                   boolean subfolderByDate,
+                                   String account,
+                                   int uploadAction,
+                                   int nameCollisionPolicy,
+                                   boolean enabled,
+                                   long timestampMs,
+                                   List<String> filePaths,
+                                   String folderName,
+                                   long numberOfFiles,
+                                   MediaFolderType type,
+                                   boolean hidden) {
+        super(id,
+              localPath,
+              remotePath,
+              wifiOnly,
+              chargingOnly,
+              existing,
+              subfolderByDate,
+              account,
+              uploadAction,
+              nameCollisionPolicy,
+              enabled,
+              timestampMs,
+              type,
+              hidden);
         this.filePaths = filePaths;
         this.folderName = folderName;
         this.numberOfFiles = numberOfFiles;
     }
 
-    public SyncedFolderDisplayItem(long id, String localPath, String remotePath, Boolean wifiOnly, Boolean chargingOnly,
-                                   Boolean subfolderByDate, String account, Integer uploadAction, Boolean enabled,
-                                   long timestampMs, String folderName, MediaFolderType type) {
-        super(id, localPath, remotePath, wifiOnly, chargingOnly, subfolderByDate, account, uploadAction, enabled,
-              timestampMs, type);
+    public SyncedFolderDisplayItem(long id,
+                                   String localPath,
+                                   String remotePath,
+                                   boolean wifiOnly,
+                                   boolean chargingOnly,
+                                   boolean existing,
+                                   boolean subfolderByDate,
+                                   String account,
+                                   int uploadAction,
+                                   int nameCollisionPolicy,
+                                   boolean enabled,
+                                   long timestampMs,
+                                   String folderName,
+                                   MediaFolderType type,
+                                   boolean hidden) {
+        super(id,
+              localPath,
+              remotePath,
+              wifiOnly,
+              chargingOnly,
+              existing,
+              subfolderByDate,
+              account,
+              uploadAction,
+              nameCollisionPolicy,
+              enabled,
+              timestampMs,
+              type,
+              hidden);
         this.folderName = folderName;
+    }
+
+    public List<String> getFilePaths() {
+        return this.filePaths;
+    }
+
+    public String getFolderName() {
+        return this.folderName;
+    }
+
+    public long getNumberOfFiles() {
+        return this.numberOfFiles;
+    }
+
+    public void setFilePaths(List<String> filePaths) {
+        this.filePaths = filePaths;
+    }
+
+    public void setFolderName(String folderName) {
+        this.folderName = folderName;
+    }
+
+    public void setNumberOfFiles(long numberOfFiles) {
+        this.numberOfFiles = numberOfFiles;
     }
 }

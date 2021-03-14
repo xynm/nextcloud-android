@@ -38,11 +38,14 @@ import android.os.Message;
 import android.os.Process;
 import android.util.Pair;
 
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
+import com.nextcloud.client.files.downloader.DownloadTask;
 import com.owncloud.android.R;
 import com.owncloud.android.authentication.AuthenticatorActivity;
 import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
+import com.owncloud.android.datamodel.UploadsStorageManager;
 import com.owncloud.android.lib.common.OwnCloudAccount;
 import com.owncloud.android.lib.common.OwnCloudClient;
 import com.owncloud.android.lib.common.OwnCloudClientManagerFactory;
@@ -52,6 +55,8 @@ import com.owncloud.android.lib.common.operations.RemoteOperationResult.ResultCo
 import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.lib.resources.files.FileUtils;
 import com.owncloud.android.operations.DownloadFileOperation;
+import com.owncloud.android.providers.DocumentsStorageProvider;
+import com.owncloud.android.ui.activity.ConflictsResolveActivity;
 import com.owncloud.android.ui.activity.FileActivity;
 import com.owncloud.android.ui.activity.FileDisplayActivity;
 import com.owncloud.android.ui.dialog.SendShareDialog;
@@ -60,9 +65,11 @@ import com.owncloud.android.ui.notifications.NotificationUtils;
 import com.owncloud.android.ui.preview.PreviewImageActivity;
 import com.owncloud.android.ui.preview.PreviewImageFragment;
 import com.owncloud.android.utils.ErrorMessageAdapter;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.MimeTypeUtil;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
 
 import java.io.File;
+import java.security.SecureRandom;
 import java.util.AbstractList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -72,18 +79,19 @@ import java.util.Vector;
 import javax.inject.Inject;
 
 import androidx.core.app.NotificationCompat;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import dagger.android.AndroidInjection;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 public class FileDownloader extends Service
         implements OnDatatransferProgressListener, OnAccountsUpdateListener {
 
-    public static final String EXTRA_ACCOUNT = "ACCOUNT";
+    public static final String EXTRA_USER = "USER";
     public static final String EXTRA_FILE = "FILE";
 
     private static final String DOWNLOAD_ADDED_MESSAGE = "DOWNLOAD_ADDED";
     private static final String DOWNLOAD_FINISH_MESSAGE = "DOWNLOAD_FINISH";
     public static final String EXTRA_DOWNLOAD_RESULT = "RESULT";
-    public static final String EXTRA_FILE_PATH = "FILE_PATH";
     public static final String EXTRA_REMOTE_PATH = "REMOTE_PATH";
     public static final String EXTRA_LINKED_TO_PATH = "LINKED_TO";
     public static final String ACCOUNT_NAME = "ACCOUNT_NAME";
@@ -109,7 +117,11 @@ public class FileDownloader extends Service
 
     private Notification mNotification;
 
+    private long conflictUploadId;
+
     @Inject UserAccountManager accountManager;
+    @Inject UploadsStorageManager uploadsStorageManager;
+    @Inject LocalBroadcastManager localBroadcastManager;
 
     public static String getDownloadAddedMessage() {
         return FileDownloader.class.getName() + DOWNLOAD_ADDED_MESSAGE;
@@ -139,7 +151,7 @@ public class FileDownloader extends Service
                 .setContentText(getApplicationContext().getResources().getString(R.string.foreground_service_download))
                 .setSmallIcon(R.drawable.notification_icon)
                 .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.notification_icon))
-                .setColor(ThemeUtils.primaryColor(getApplicationContext(), true));
+                .setColor(ThemeColorUtils.primaryColor(getApplicationContext(), true));
 
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             builder.setChannelId(NotificationUtils.NOTIFICATION_CHANNEL_DOWNLOAD);
@@ -185,23 +197,29 @@ public class FileDownloader extends Service
 
         startForeground(FOREGROUND_SERVICE_ID, mNotification);
 
-        if (intent == null || !intent.hasExtra(EXTRA_ACCOUNT) || !intent.hasExtra(EXTRA_FILE)) {
+        if (intent == null || !intent.hasExtra(EXTRA_USER) || !intent.hasExtra(EXTRA_FILE)) {
             Log_OC.e(TAG, "Not enough information provided in intent");
             return START_NOT_STICKY;
         } else {
-            final Account account = intent.getParcelableExtra(EXTRA_ACCOUNT);
+            final User user = intent.getParcelableExtra(EXTRA_USER);
             final OCFile file = intent.getParcelableExtra(EXTRA_FILE);
             final String behaviour = intent.getStringExtra(OCFileListFragment.DOWNLOAD_BEHAVIOUR);
             String activityName = intent.getStringExtra(SendShareDialog.ACTIVITY_NAME);
             String packageName = intent.getStringExtra(SendShareDialog.PACKAGE_NAME);
+            conflictUploadId = intent.getLongExtra(ConflictsResolveActivity.EXTRA_CONFLICT_UPLOAD_ID, -1);
             AbstractList<String> requestedDownloads = new Vector<String>();
             try {
-                DownloadFileOperation newDownload = new DownloadFileOperation(account, file, behaviour, activityName,
-                        packageName, getBaseContext());
+                DownloadFileOperation newDownload = new DownloadFileOperation(user.toPlatformAccount(),
+                                                                              file,
+                                                                              behaviour,
+                                                                              activityName,
+                                                                              packageName,
+                                                                              getBaseContext());
                 newDownload.addDatatransferProgressListener(this);
                 newDownload.addDatatransferProgressListener((FileDownloaderBinder) mBinder);
-                Pair<String, String> putResult = mPendingDownloads.putIfAbsent(
-                        account.name, file.getRemotePath(), newDownload);
+                Pair<String, String> putResult = mPendingDownloads.putIfAbsent(user.getAccountName(),
+                                                                               file.getRemotePath(),
+                                                                               newDownload);
                 if (putResult != null) {
                     String downloadKey = putResult.first;
                     requestedDownloads.add(downloadKey);
@@ -223,7 +241,6 @@ public class FileDownloader extends Service
 
         return START_NOT_STICKY;
     }
-
 
     /**
      * Provides a binder object that clients can use to perform operations on the queue of downloads,
@@ -280,13 +297,13 @@ public class FileDownloader extends Service
          */
         public void cancel(Account account, OCFile file) {
             Pair<DownloadFileOperation, String> removeResult =
-                    mPendingDownloads.remove(account.name, file.getRemotePath());
+                mPendingDownloads.remove(account.name, file.getRemotePath());
             DownloadFileOperation download = removeResult.first;
             if (download != null) {
                 download.cancel();
             } else {
                 if (mCurrentDownload != null && mCurrentAccount != null &&
-                        mCurrentDownload.getRemotePath().startsWith(file.getRemotePath()) &&
+                    mCurrentDownload.getRemotePath().startsWith(file.getRemotePath()) &&
                         account.name.equals(mCurrentAccount.name)) {
                     mCurrentDownload.cancel();
                 }
@@ -323,11 +340,11 @@ public class FileDownloader extends Service
          * If 'file' is a directory, returns 'true' if any of its descendant files is downloading or
          * waiting to download.
          *
-         * @param account ownCloud account where the remote file is stored.
+         * @param user    user where the remote file is stored.
          * @param file    A file that could be in the queue of downloads.
          */
-        public boolean isDownloading(Account account, OCFile file) {
-            return account != null && file != null && mPendingDownloads.contains(account.name, file.getRemotePath());
+        public boolean isDownloading(User user, OCFile file) {
+            return user != null && file != null && mPendingDownloads.contains(user.getAccountName(), file.getRemotePath());
         }
 
 
@@ -335,13 +352,10 @@ public class FileDownloader extends Service
          * Adds a listener interested in the progress of the download for a concrete file.
          *
          * @param listener Object to notify about progress of transfer.
-         * @param account  ownCloud account holding the file of interest.
          * @param file     {@link OCFile} of interest for listener.
          */
-        public void addDatatransferProgressListener(
-                OnDatatransferProgressListener listener, Account account, OCFile file
-        ) {
-            if (account == null || file == null || listener == null) {
+        public void addDatatransferProgressListener(OnDatatransferProgressListener listener, OCFile file) {
+            if (file == null || listener == null) {
                 return;
             }
             mBoundListeners.put(file.getFileId(), listener);
@@ -352,13 +366,10 @@ public class FileDownloader extends Service
          * Removes a listener interested in the progress of the download for a concrete file.
          *
          * @param listener      Object to notify about progress of transfer.
-         * @param account       ownCloud account holding the file of interest.
          * @param file          {@link OCFile} of interest for listener.
          */
-        public void removeDatatransferProgressListener(
-                OnDatatransferProgressListener listener, Account account, OCFile file
-        ) {
-            if (account == null || file == null || listener == null) {
+        public void removeDatatransferProgressListener(OnDatatransferProgressListener listener, OCFile file) {
+            if (file == null || listener == null) {
                 return;
             }
             Long fileId = file.getFileId();
@@ -410,6 +421,7 @@ public class FileDownloader extends Service
                 }
             }
             Log_OC.d(TAG, "Stopping after command with id " + msg.arg1);
+            mService.mNotificationManager.cancel(FOREGROUND_SERVICE_ID);
             mService.stopForeground(true);
             mService.stopSelf(msg.arg1);
         }
@@ -446,10 +458,7 @@ public class FileDownloader extends Service
 
                     // always get client from client manager, to get fresh credentials in case
                     // of update
-                    OwnCloudAccount ocAccount = new OwnCloudAccount(
-                            mCurrentAccount,
-                            this
-                    );
+                    OwnCloudAccount ocAccount = new OwnCloudAccount(mCurrentAccount, this);
                     mDownloadClient = OwnCloudClientManagerFactory.getDefaultSingleton().
                             getClientFor(ocAccount, this);
 
@@ -467,6 +476,10 @@ public class FileDownloader extends Service
                 } finally {
                     Pair<DownloadFileOperation, String> removeResult = mPendingDownloads.removePayload(
                         mCurrentAccount.name, mCurrentDownload.getRemotePath());
+
+                    if (downloadResult == null) {
+                        downloadResult = new RemoteOperationResult(new RuntimeException("Error downloading…"));
+                    }
 
                     /// notify result
                     notifyDownloadResult(mCurrentDownload, downloadResult);
@@ -489,9 +502,21 @@ public class FileDownloader extends Service
      * Updates the OC File after a successful download.
      *
      * TODO move to DownloadFileOperation
+     *  unify with code from {@link DocumentsStorageProvider} and {@link DownloadTask}.
      */
     private void saveDownloadedFile() {
         OCFile file = mStorageManager.getFileById(mCurrentDownload.getFile().getFileId());
+
+        if (file == null) {
+            // try to get file via path, needed for overwriting existing files on conflict dialog
+            file = mStorageManager.getFileByDecryptedRemotePath(mCurrentDownload.getFile().getRemotePath());
+        }
+
+        if (file == null) {
+            Log_OC.e(this, "Could not save " + mCurrentDownload.getFile().getRemotePath());
+            return;
+        }
+
         long syncDate = System.currentTimeMillis();
         file.setLastSyncDateForProperties(syncDate);
         file.setLastSyncDateForData(syncDate);
@@ -504,7 +529,9 @@ public class FileDownloader extends Service
         file.setFileLength(new File(mCurrentDownload.getSavePath()).length());
         file.setRemoteId(mCurrentDownload.getFile().getRemoteId());
         mStorageManager.saveFile(file);
-        FileDataStorageManager.triggerMediaScan(file.getStoragePath());
+        if (MimeTypeUtil.isMedia(mCurrentDownload.getMimeType())) {
+            FileDataStorageManager.triggerMediaScan(file.getStoragePath(), file);
+        }
         mStorageManager.saveConflict(file, null);
     }
 
@@ -588,17 +615,18 @@ public class FileDownloader extends Service
      * @param downloadResult Result of the download operation.
      * @param download       Finished download operation
      */
+    @SuppressFBWarnings("DMI")
     private void notifyDownloadResult(DownloadFileOperation download,
                                       RemoteOperationResult downloadResult) {
         if (mNotificationManager == null) {
             mNotificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         }
 
-        if (mNotificationManager != null) {
-            mNotificationManager.cancel(R.string.downloader_download_in_progress_ticker);
-        }
-
         if (!downloadResult.isCancelled()) {
+            if (downloadResult.isSuccess()) {
+                // Dont show notification except an error has occured.
+                return;
+            }
             int tickerId = downloadResult.isSuccess() ?
                     R.string.downloader_download_succeeded_ticker : R.string.downloader_download_failed_ticker;
 
@@ -627,13 +655,17 @@ public class FileDownloader extends Service
                     download, getResources()));
 
             if (mNotificationManager != null) {
-                mNotificationManager.notify(tickerId, mNotificationBuilder.build());
+                mNotificationManager.notify((new SecureRandom()).nextInt(), mNotificationBuilder.build());
 
                 // Remove success notification
                 if (downloadResult.isSuccess()) {
+                    if (conflictUploadId > 0) {
+                        uploadsStorageManager.removeUpload(conflictUploadId);
+                    }
+
                     // Sleep 2 seconds, so show the notification before remove it
                     NotificationUtils.cancelWithDelay(mNotificationManager,
-                            R.string.downloader_download_succeeded_ticker, 2000);
+                                                      R.string.downloader_download_succeeded_ticker, 2000);
                 }
             }
         }
@@ -672,7 +704,6 @@ public class FileDownloader extends Service
         end.putExtra(EXTRA_DOWNLOAD_RESULT, downloadResult.isSuccess());
         end.putExtra(ACCOUNT_NAME, download.getAccount().name);
         end.putExtra(EXTRA_REMOTE_PATH, download.getRemotePath());
-        end.putExtra(EXTRA_FILE_PATH, download.getSavePath());
         end.putExtra(OCFileListFragment.DOWNLOAD_BEHAVIOUR, download.getBehaviour());
         end.putExtra(SendShareDialog.ACTIVITY_NAME, download.getActivityName());
         end.putExtra(SendShareDialog.PACKAGE_NAME, download.getPackageName());
@@ -680,7 +711,7 @@ public class FileDownloader extends Service
             end.putExtra(EXTRA_LINKED_TO_PATH, unlinkedFromRemotePath);
         }
         end.setPackage(getPackageName());
-        sendStickyBroadcast(end);
+        localBroadcastManager.sendBroadcast(end);
     }
 
 
@@ -695,10 +726,9 @@ public class FileDownloader extends Service
         Intent added = new Intent(getDownloadAddedMessage());
         added.putExtra(ACCOUNT_NAME, download.getAccount().name);
         added.putExtra(EXTRA_REMOTE_PATH, download.getRemotePath());
-        added.putExtra(EXTRA_FILE_PATH, download.getSavePath());
         added.putExtra(EXTRA_LINKED_TO_PATH, linkedToRemotePath);
         added.setPackage(getPackageName());
-        sendStickyBroadcast(added);
+        localBroadcastManager.sendBroadcast(added);
     }
 
     /**

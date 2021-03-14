@@ -20,59 +20,40 @@
 
 package com.owncloud.android.operations;
 
-import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.lib.common.OwnCloudClient;
 import com.owncloud.android.lib.common.operations.RemoteOperation;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
-import com.owncloud.android.lib.resources.files.FileUtils;
 import com.owncloud.android.lib.resources.shares.GetShareRemoteOperation;
 import com.owncloud.android.lib.resources.shares.OCShare;
-import com.owncloud.android.lib.resources.shares.ShareType;
 import com.owncloud.android.lib.resources.shares.UpdateShareRemoteOperation;
 import com.owncloud.android.operations.common.SyncOperation;
-
-import lombok.Getter;
-import lombok.Setter;
 
 
 /**
  * Updates an existing public share for a given file
  */
 public class UpdateShareViaLinkOperation extends SyncOperation {
+    private String password;
+    private Boolean hideFileDownload;
+    private long expirationDateInMillis;
+    private long shareId;
+    private String label;
 
-    @Getter private String path;
-    @Getter @Setter private String password;
-    /** Enable upload permissions to update in Share resource. */
-    @Setter private Boolean publicUploadOnFolder;
-    @Setter private Boolean publicUploadOnFile;
-    @Setter private Boolean hideFileDownload;
-    @Setter private long expirationDateInMillis;
-
-    /**
-     * Constructor
-     *
-     * @param path          Full path of the file/folder being shared. Mandatory argument
-     */
-    public UpdateShareViaLinkOperation(String path) {
-        this.path = path;
+    public UpdateShareViaLinkOperation(long shareId) {
         expirationDateInMillis = 0;
+        this.shareId = shareId;
     }
 
     @Override
     protected RemoteOperationResult run(OwnCloudClient client) {
-        OCShare publicShare = getStorageManager().getFirstShareByPathAndType(path, ShareType.PUBLIC_LINK, "");
-
-        if (publicShare == null) {
-            // TODO try to get remote share before failing?
-            return new RemoteOperationResult(RemoteOperationResult.ResultCode.SHARE_NOT_FOUND);
-        }
+        OCShare publicShare = getStorageManager().getShareById(shareId);
 
         UpdateShareRemoteOperation updateOp = new UpdateShareRemoteOperation(publicShare.getRemoteId());
         updateOp.setPassword(password);
         updateOp.setExpirationDate(expirationDateInMillis);
-        updateOp.setPublicUploadOnFolder(publicUploadOnFolder);
-        updateOp.setPublicUploadOnFile(publicUploadOnFile);
         updateOp.setHideFileDownload(hideFileDownload);
+        updateOp.setLabel(label);
+
         RemoteOperationResult result = updateOp.execute(client);
 
         if (result.isSuccess()) {
@@ -81,31 +62,30 @@ public class UpdateShareViaLinkOperation extends SyncOperation {
             result = getShareOp.execute(client);
             if (result.isSuccess()) {
                 OCShare share = (OCShare) result.getData().get(0);
-                updateData(share);
+                getStorageManager().saveShare(share);
             }
         }
 
         return result;
     }
 
-    private void updateData(OCShare share) {
-        // Update DB with the response
-        share.setPath(path);
-        if (path.endsWith(FileUtils.PATH_SEPARATOR)) {
-            share.setFolder(true);
-        } else {
-            share.setFolder(false);
-        }
+    public String getPassword() {
+        return this.password;
+    }
 
-        getStorageManager().saveShare(share);   // TODO info about having a password? ask to Gonzalo
+    public void setPassword(String password) {
+        this.password = password;
+    }
 
-        // Update OCFile with data from share: ShareByLink  and publicLink
-        // TODO check & remove if not needed
-        OCFile file = getStorageManager().getFileByPath(path);
-        if (file != null) {
-            file.setPublicLink(share.getShareLink());
-            file.setSharedViaLink(true);
-            getStorageManager().saveFile(file);
-        }
+    public void setHideFileDownload(Boolean hideFileDownload) {
+        this.hideFileDownload = hideFileDownload;
+    }
+
+    public void setExpirationDateInMillis(long expirationDateInMillis) {
+        this.expirationDateInMillis = expirationDateInMillis;
+    }
+
+    public void setLabel(String label) {
+        this.label = label;
     }
 }

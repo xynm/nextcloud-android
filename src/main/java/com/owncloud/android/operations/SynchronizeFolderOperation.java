@@ -20,12 +20,13 @@
 
 package com.owncloud.android.operations;
 
-import android.accounts.Account;
 import android.content.Context;
 import android.content.Intent;
 import android.text.TextUtils;
 import android.util.Log;
 
+import com.nextcloud.client.account.User;
+import com.owncloud.android.datamodel.DecryptedFolderMetadata;
 import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.files.services.FileDownloader;
@@ -43,7 +44,7 @@ import com.owncloud.android.utils.FileStorageUtils;
 import com.owncloud.android.utils.MimeTypeUtil;
 
 import java.io.File;
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Vector;
@@ -71,7 +72,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
     private String mRemotePath;
 
     /** Account where the file to synchronize belongs */
-    private Account mAccount;
+    private User user;
 
     /** Android context; necessary to send requests to the download service */
     private Context mContext;
@@ -101,14 +102,13 @@ public class SynchronizeFolderOperation extends SyncOperation {
      *
      * @param   context                 Application context.
      * @param   remotePath              Path to synchronize.
-     * @param   account                 ownCloud account where the folder is located.
+     * @param   user                    Nextcloud account where the folder is located.
      * @param   currentSyncTime         Time stamp for the synchronization process in progress.
      */
-    public SynchronizeFolderOperation(Context context, String remotePath, Account account,
-                                      long currentSyncTime){
+    public SynchronizeFolderOperation(Context context, String remotePath, User user, long currentSyncTime){
         mRemotePath = remotePath;
         mCurrentSyncTime = currentSyncTime;
-        mAccount = account;
+        this.user = user;
         mContext = context;
         mRemoteFolderChanged = false;
         mFilesForDirectDownload = new Vector<>();
@@ -159,7 +159,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
     }
 
     private RemoteOperationResult checkForChanges(OwnCloudClient client) throws OperationCancelledException {
-        Log_OC.d(TAG, "Checking changes in " + mAccount.name + mRemotePath);
+        Log_OC.d(TAG, "Checking changes in " + user.getAccountName() + mRemotePath);
 
         mRemoteFolderChanged = true;
 
@@ -178,7 +178,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
 
             result = new RemoteOperationResult(ResultCode.OK);
 
-            Log_OC.i(TAG, "Checked " + mAccount.name + mRemotePath + " : " +
+            Log_OC.i(TAG, "Checked " + user.getAccountName() + mRemotePath + " : " +
                     (mRemoteFolderChanged ? "changed" : "not changed"));
 
         } else {
@@ -187,10 +187,10 @@ public class SynchronizeFolderOperation extends SyncOperation {
                 removeLocalFolder();
             }
             if (result.isException()) {
-                Log_OC.e(TAG, "Checked " + mAccount.name + mRemotePath  + " : " +
+                Log_OC.e(TAG, "Checked " + user.getAccountName() + mRemotePath  + " : " +
                         result.getLogMessage(), result.getException());
             } else {
-                Log_OC.e(TAG, "Checked " + mAccount.name + mRemotePath + " : " +
+                Log_OC.e(TAG, "Checked " + user.getAccountName() + mRemotePath + " : " +
                         result.getLogMessage());
             }
 
@@ -207,7 +207,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
 
         ReadFolderRemoteOperation operation = new ReadFolderRemoteOperation(mRemotePath);
         RemoteOperationResult result = operation.execute(client);
-        Log_OC.d(TAG, "Synchronizing " + mAccount.name + mRemotePath);
+        Log_OC.d(TAG, "Synchronizing " + user.getAccountName() + mRemotePath);
 
         if (result.isSuccess()) {
             synchronizeData(result.getData());
@@ -228,7 +228,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
     private void removeLocalFolder() {
         FileDataStorageManager storageManager = getStorageManager();
         if (storageManager.fileExists(mLocalFolder.getFileId())) {
-            String currentSavePath = FileStorageUtils.getSavePath(mAccount.name);
+            String currentSavePath = FileStorageUtils.getSavePath(user.getAccountName());
             storageManager.removeFolder(
                     mLocalFolder,
                     true,
@@ -246,13 +246,14 @@ public class SynchronizeFolderOperation extends SyncOperation {
      * @param folderAndFiles Remote folder and children files in Folder
      */
     private void synchronizeData(List<Object> folderAndFiles) throws OperationCancelledException {
+
+
         // parse data from remote folder
         OCFile remoteFolder = FileStorageUtils.fillOCFile((RemoteFile) folderAndFiles.get(0));
         remoteFolder.setParentId(mLocalFolder.getParentId());
         remoteFolder.setFileId(mLocalFolder.getFileId());
 
-        Log_OC.d(TAG, "Remote folder " + mLocalFolder.getRemotePath()
-                + " changed - starting update of local data ");
+        Log_OC.d(TAG, "Remote folder " + mLocalFolder.getRemotePath() + " changed - starting update of local data ");
 
         mFilesForDirectDownload.clear();
         mFilesToSyncContents.clear();
@@ -262,38 +263,66 @@ public class SynchronizeFolderOperation extends SyncOperation {
         }
 
         FileDataStorageManager storageManager = getStorageManager();
-        List<OCFile> updatedFiles = new Vector<>(folderAndFiles.size() - 1);
+
+        // if local folder is encrypted, download fresh metadata
+        boolean encryptedAncestor = FileStorageUtils.checkEncryptionStatus(remoteFolder, storageManager);
+        mLocalFolder.setEncrypted(encryptedAncestor);
+
+        // update permission
+        mLocalFolder.setPermissions(remoteFolder.getPermissions());
+
+        // update richWorkspace
+        mLocalFolder.setRichWorkspace(remoteFolder.getRichWorkspace());
+
+        DecryptedFolderMetadata metadata = RefreshFolderOperation.getDecryptedFolderMetadata(encryptedAncestor,
+                                                                                             mLocalFolder,
+                                                                                             getClient(),
+                                                                                             user.toPlatformAccount(),
+                                                                                             mContext);
 
         // get current data about local contents of the folder to synchronize
-        List<OCFile> localFiles = storageManager.getFolderContent(mLocalFolder, false);
-        Map<String, OCFile> localFilesMap = new HashMap<>(localFiles.size());
-        for (OCFile file : localFiles) {
-            localFilesMap.put(file.getRemotePath(), file);
-        }
+        Map<String, OCFile> localFilesMap =
+            RefreshFolderOperation.prefillLocalFilesMap(metadata,
+                                                        storageManager.getFolderContent(mLocalFolder, false));
 
         // loop to synchronize every child
+        List<OCFile> updatedFiles = new ArrayList<>(folderAndFiles.size() - 1);
         OCFile remoteFile;
         OCFile localFile;
         OCFile updatedFile;
-        RemoteFile r;
-        for (int i=1; i<folderAndFiles.size(); i++) {
-            /// new OCFile instance with the data from the server
-            r = (RemoteFile) folderAndFiles.get(i);
-            remoteFile = FileStorageUtils.fillOCFile(r);
+        RemoteFile remote;
 
-            /// retrieve local data for the read file
-            //  localFile = mStorageManager.getFileByPath(remoteFile.getRemotePath());
-            localFile = localFilesMap.remove(remoteFile.getRemotePath());
+        for (int i = 1; i < folderAndFiles.size(); i++) {
+            /// new OCFile instance with the data from the server
+            remote = (RemoteFile) folderAndFiles.get(i);
+            remoteFile = FileStorageUtils.fillOCFile(remote);
 
             /// new OCFile instance to merge fresh data from server with local state
-            updatedFile = FileStorageUtils.fillOCFile(r);
+            updatedFile = FileStorageUtils.fillOCFile(remote);
             updatedFile.setParentId(mLocalFolder.getFileId());
+
+            /// retrieve local data for the read file
+            localFile = localFilesMap.remove(remoteFile.getRemotePath());
+
+            // TODO better implementation is needed
+            if (localFile == null) {
+                localFile = storageManager.getFileByPath(updatedFile.getRemotePath());
+            }
 
             /// add to updatedFile data about LOCAL STATE (not existing in server)
             updateLocalStateData(remoteFile, localFile, updatedFile);
 
             /// check and fix, if needed, local storage path
-            searchForLocalFileInDefaultPath(updatedFile);
+            FileStorageUtils.searchForLocalFileInDefaultPath(updatedFile, user.toPlatformAccount());
+
+            // update file name for encrypted files
+            if (metadata != null) {
+                RefreshFolderOperation.updateFileNameForEncryptedFile(storageManager, metadata, updatedFile);
+            }
+
+            // we parse content, so either the folder itself or its direct parent (which we check) must be encrypted
+            boolean encrypted = updatedFile.isEncrypted() || mLocalFolder.isEncrypted();
+            updatedFile.setEncrypted(encrypted);
 
             /// classify file to sync/download contents later
             classifyFileForLaterSyncOrDownload(remoteFile, localFile);
@@ -301,8 +330,14 @@ public class SynchronizeFolderOperation extends SyncOperation {
             updatedFiles.add(updatedFile);
         }
 
+        if (metadata != null) {
+            RefreshFolderOperation.updateFileNameForEncryptedFile(storageManager, metadata, mLocalFolder);
+        }
+
         // save updated contents in local database
         storageManager.saveFolder(remoteFolder, updatedFiles, localFilesMap.values());
+        mLocalFolder.setLastSyncDateForData(System.currentTimeMillis());
+        storageManager.saveFile(mLocalFolder);
     }
 
     private void updateLocalStateData(OCFile remoteFile, OCFile localFile, OCFile updatedFile) {
@@ -325,7 +360,6 @@ public class SynchronizeFolderOperation extends SyncOperation {
                 updatedFile.setUpdateThumbnailNeeded(true);
                 Log.d(TAG, "Image " + remoteFile.getFileName() + " updated on the server");
             }
-            updatedFile.setPublicLink(localFile.getPublicLink());
             updatedFile.setSharedViaLink(localFile.isSharedViaLink());
             updatedFile.setSharedWithSharee(localFile.isSharedWithSharee());
             updatedFile.setEtagInConflict(localFile.getEtagInConflict());
@@ -351,7 +385,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
             SynchronizeFileOperation operation = new SynchronizeFileOperation(
                     localFile,
                     remoteFile,
-                    mAccount,
+                    user,
                     true,
                     mContext
                 );
@@ -383,7 +417,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
                     SynchronizeFileOperation operation = new SynchronizeFileOperation(
                             child,
                             child.getEtagInConflict() != null ? child : null,
-                            mAccount,
+                            user,
                             true,
                             mContext
                     );
@@ -409,7 +443,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
                     throw new OperationCancelledException();
                 }
                 Intent i = new Intent(mContext, FileDownloader.class);
-                i.putExtra(FileDownloader.EXTRA_ACCOUNT, mAccount);
+                i.putExtra(FileDownloader.EXTRA_USER, user);
                 i.putExtra(FileDownloader.EXTRA_FILE, file);
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                     mContext.startForegroundService(i);
@@ -465,7 +499,7 @@ public class SynchronizeFolderOperation extends SyncOperation {
      */
     private void searchForLocalFileInDefaultPath(OCFile file) {
         if (file.getStoragePath() == null && !file.isFolder()) {
-            File f = new File(FileStorageUtils.getDefaultSavePathFor(mAccount.name, file));
+            File f = new File(FileStorageUtils.getDefaultSavePathFor(user.getAccountName(), file));
             if (f.exists()) {
                 file.setStoragePath(f.getAbsolutePath());
                 file.setLastSyncDateForData(f.lastModified());
@@ -486,19 +520,15 @@ public class SynchronizeFolderOperation extends SyncOperation {
         if (!TextUtils.isEmpty(path)) {
             return path;
         }
-        return FileStorageUtils.getDefaultSavePathFor(mAccount.name, mLocalFolder);
+        return FileStorageUtils.getDefaultSavePathFor(user.getAccountName(), mLocalFolder);
     }
 
     private void startSyncFolderOperation(String path){
         Intent intent = new Intent(mContext, OperationsService.class);
         intent.setAction(OperationsService.ACTION_SYNC_FOLDER);
-        intent.putExtra(OperationsService.EXTRA_ACCOUNT, mAccount);
+        intent.putExtra(OperationsService.EXTRA_ACCOUNT, user.toPlatformAccount());
         intent.putExtra(OperationsService.EXTRA_REMOTE_PATH, path);
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            mContext.startForegroundService(intent);
-        } else {
-            mContext.startService(intent);
-        }
+        mContext.startService(intent);
     }
 
     public String getRemotePath() {

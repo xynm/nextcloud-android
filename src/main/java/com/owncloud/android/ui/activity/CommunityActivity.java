@@ -21,7 +21,6 @@
  */
 package com.owncloud.android.ui.activity;
 
-import android.content.Intent;
 import android.os.Bundle;
 import android.text.Html;
 import android.text.method.LinkMovementMethod;
@@ -32,12 +31,14 @@ import android.widget.TextView;
 import com.google.android.material.button.MaterialButton;
 import com.owncloud.android.R;
 import com.owncloud.android.utils.DisplayUtils;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeButtonUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
+import com.owncloud.android.utils.theme.ThemeUtils;
 
 /**
  * Activity providing information about ways to participate in the app's development.
  */
-public class CommunityActivity extends FileActivity {
+public class CommunityActivity extends DrawerActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,10 +49,10 @@ public class CommunityActivity extends FileActivity {
         // setup toolbar
         setupToolbar();
 
+        updateActionBarTitleAndHomeButtonByString(getString(R.string.drawer_community));
+
         // setup drawer
         setupDrawer(R.id.nav_community);
-
-        ThemeUtils.setColoredTitle(getSupportActionBar(), R.string.drawer_community, this);
 
         setupContent();
     }
@@ -64,21 +65,22 @@ public class CommunityActivity extends FileActivity {
         contributeIrcView.setMovementMethod(LinkMovementMethod.getInstance());
         contributeIrcView.setText(Html.fromHtml(getString(R.string.community_contribute_irc_text) + " " +
                                                     getString(R.string.community_contribute_irc_text_link,
-                        ThemeUtils.colorToHexString(ThemeUtils.primaryColor(this, true)),
-                        getString(R.string.irc_weblink))));
+                                                              ThemeColorUtils.primaryColorToHexString(this),
+                                                              getString(R.string.irc_weblink))));
 
         TextView contributeForumView = findViewById(R.id.community_contribute_forum_text);
         contributeForumView.setMovementMethod(LinkMovementMethod.getInstance());
         contributeForumView.setText(Html.fromHtml(getString(R.string.community_contribute_forum_text) + " " +
                                                       getString(R.string.community_contribute_forum_text_link,
-                                                                ThemeUtils.colorToHexString(ThemeUtils.primaryColor(this, true)),
-                                                                getString(R.string.help_link), getString(R.string.community_contribute_forum_forum))));
+                                                                ThemeColorUtils.primaryColorToHexString(this),
+                                                                getString(R.string.help_link),
+                                                                getString(R.string.community_contribute_forum_forum))));
 
         TextView contributeTranslationView = findViewById(R.id.community_contribute_translate_text);
         contributeTranslationView.setMovementMethod(LinkMovementMethod.getInstance());
         contributeTranslationView.setText(Html.fromHtml(
             getString(R.string.community_contribute_translate_link,
-                      ThemeUtils.colorToHexString(ThemeUtils.primaryColor(this, true)),
+                      ThemeColorUtils.primaryColorToHexString(this),
                       getString(R.string.translation_link),
                       getString(R.string.community_contribute_translate_translate)) + " " +
                 getString(R.string.community_contribute_translate_text)));
@@ -88,11 +90,11 @@ public class CommunityActivity extends FileActivity {
         contributeGithubView.setText(Html.fromHtml(
             getString(R.string.community_contribute_github_text,
                       getString(R.string.community_contribute_github_text_link,
-                                ThemeUtils.colorToHexString(ThemeUtils.primaryColor(this, true)),
+                                ThemeColorUtils.primaryColorToHexString(this),
                                 getString(R.string.contributing_link)))));
 
         MaterialButton reportButton = findViewById(R.id.community_testing_report);
-        reportButton.setBackgroundColor(ThemeUtils.primaryColor(this,true));
+        ThemeButtonUtils.colorPrimaryButton(reportButton, this);
         reportButton.setOnClickListener(v -> DisplayUtils.startLinkIntent(this, R.string.report_issue_link));
     }
 
@@ -130,15 +132,6 @@ public class CommunityActivity extends FileActivity {
                 break;
         }
         return retval;
-    }
-
-    @Override
-    public void showFiles(boolean onDeviceOnly) {
-        super.showFiles(onDeviceOnly);
-        Intent fileDisplayActivity = new Intent(getApplicationContext(),
-                FileDisplayActivity.class);
-        fileDisplayActivity.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        startActivity(fileDisplayActivity);
     }
 
     @Override

@@ -60,7 +60,6 @@
     <uses-permission android:name="android.permission.READ_SYNC_STATS" />
     <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
-    <uses-permission android:name="android.permission.BROADCAST_STICKY" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -71,8 +70,6 @@
     <!-- Apps that target Android 9 (API level 28) or higher and use foreground services
     must request the FOREGROUND_SERVICE permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-
-    <uses-sdk tools:overrideLibrary="com.blikoon.qrcodescanner, io.noties.markwon.ext.latex, io.noties.markwon.ext.strikethrough, io.noties.markwon.ext.tables, io.noties.markwon.ext.tasklist, io.noties.markwon.html, io.noties.markwon.linkify, io.noties.markwon.syntax, io.noties.markwon, ru.noties.jlatexmath.android" />
 
     <!-- Some Chromebooks don't support touch. Although not essential,
          it's a good idea to explicitly include this declaration. -->
@@ -96,6 +93,7 @@
         android:installLocation="internalOnly"
         android:manageSpaceActivity="com.owncloud.android.ui.activity.ManageSpaceActivity"
         android:usesCleartextTraffic="true"
+        android:requestLegacyExternalStorage="true"
         tools:ignore="UnusedAttribute">
 
         <uses-library
@@ -116,6 +114,18 @@
             <intent-filter>
                 <action android:name="android.intent.action.SEARCH" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:host="*" />
+                <data android:pathPattern="/f/..*" />
+                <data android:pathPattern="/..*/f/..*" />
+                <data android:pathPattern="/..*/..*/f/..*" />
+                <data android:pathPattern="/..*/..*/..*/f/..*" />
+            </intent-filter>
             <meta-data android:name="android.app.searchable"
                 android:resource="@xml/users_and_groups_searchable"/>
         </activity>
@@ -126,13 +136,16 @@
         <activity android:name=".ui.activities.ActivitiesActivity"
             android:configChanges="orientation|screenSize|keyboardHidden" />
         <activity android:name=".ui.activity.SyncedFoldersActivity"/>
-        <receiver android:name="com.owncloud.android.jobs.MediaFoldersDetectionJob$NotificationReceiver" />
-        <receiver android:name="com.owncloud.android.jobs.NotificationJob$NotificationReceiver" />
+        <receiver android:name="com.nextcloud.client.jobs.MediaFoldersDetectionWork$NotificationReceiver" />
+        <receiver android:name="com.nextcloud.client.jobs.NotificationWork$NotificationReceiver" />
         <activity android:name=".ui.activity.UploadFilesActivity" />
         <activity android:name=".ui.activity.ExternalSiteWebView"
                   android:configChanges="orientation|screenSize|keyboardHidden" />
         <activity
-            android:name=".ui.activity.RichDocumentsWebView"
+            android:name=".ui.activity.RichDocumentsEditorWebView"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
+            android:name=".ui.activity.TextEditorWebView"
             android:configChanges="orientation|screenSize|keyboardHidden"/>
         <activity android:name=".ui.activity.ContactsPreferenceActivity"
             android:launchMode="singleInstance"/>
@@ -234,7 +247,7 @@
             android:authorities="@string/users_and_groups_search_authority"
             android:enabled="true"
             android:exported="false"
-            android:label="@string/search_users_and_groups_hint" />
+            android:label="@string/share_search" />
 
         <provider
             android:name=".providers.DocumentsStorageProvider"
@@ -242,7 +255,7 @@
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS"
-            android:enabled="@bool/atLeastKitKat">
+            android:enabled="true">
             <intent-filter>
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
@@ -309,6 +322,7 @@
 
         <service android:name=".services.OperationsService" />
         <service android:name=".files.services.FileDownloader" />
+        <service android:name="com.nextcloud.client.files.downloader.DownloaderService" />
         <service android:name=".files.services.FileUploader" />
         <service android:name="com.nextcloud.client.media.PlayerService"/>
 
@@ -394,7 +408,12 @@
 
         <activity
             android:name="com.nextcloud.client.etm.EtmActivity"
-            android:theme="@style/Theme.ownCloud.Toolbar"/>
+            android:theme="@style/Theme.ownCloud.Toolbar" />
     </application>
 
+    <queries>
+        <package android:name="it.niedermann.nextcloud.deck" />
+        <package android:name="it.niedermann.nextcloud.deck.play" />
+        <package android:name="it.niedermann.nextcloud.deck.dev" />
+    </queries>
 </manifest>

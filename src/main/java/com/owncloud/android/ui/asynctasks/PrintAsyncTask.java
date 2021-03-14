@@ -22,14 +22,13 @@
 package com.owncloud.android.ui.asynctasks;
 
 import android.os.AsyncTask;
-import android.os.Build;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
 import android.print.PrintManager;
 
 import com.owncloud.android.R;
 import com.owncloud.android.lib.common.utils.Log_OC;
-import com.owncloud.android.ui.activity.RichDocumentsWebView;
+import com.owncloud.android.ui.activity.RichDocumentsEditorWebView;
 import com.owncloud.android.ui.adapter.PrintAdapter;
 import com.owncloud.android.utils.DisplayUtils;
 
@@ -44,20 +43,17 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.ref.WeakReference;
 
-import androidx.annotation.RequiresApi;
-
 import static android.content.Context.PRINT_SERVICE;
 
-@RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
 public class PrintAsyncTask extends AsyncTask<Void, Void, Boolean> {
     private static final String TAG = PrintAsyncTask.class.getSimpleName();
     private static final String JOB_NAME = "Document";
 
     private File file;
     private String url;
-    private WeakReference<RichDocumentsWebView> richDocumentsWebViewWeakReference;
+    private WeakReference<RichDocumentsEditorWebView> richDocumentsWebViewWeakReference;
 
-    public PrintAsyncTask(File file, String url, WeakReference<RichDocumentsWebView> richDocumentsWebViewWeakReference) {
+    public PrintAsyncTask(File file, String url, WeakReference<RichDocumentsEditorWebView> richDocumentsWebViewWeakReference) {
         this.file = file;
         this.url = url;
         this.richDocumentsWebViewWeakReference = richDocumentsWebViewWeakReference;
@@ -75,26 +71,27 @@ public class PrintAsyncTask extends AsyncTask<Void, Void, Boolean> {
     @Override
     protected Boolean doInBackground(Void... voids) {
         HttpClient client = new HttpClient();
-        GetMethod getMethod = new GetMethod(url);
+        GetMethod getMethod = null;
 
         FileOutputStream fos;
         try {
+            getMethod = new GetMethod(url);
             int status = client.executeMethod(getMethod);
             if (status == HttpStatus.SC_OK) {
                 if (file.exists() && !file.delete()) {
-                    return false;
+                    return Boolean.FALSE;
                 }
 
                 file.getParentFile().mkdirs();
 
                 if (!file.getParentFile().exists()) {
                     Log_OC.d(TAG, file.getParentFile().getAbsolutePath() + " does not exist");
-                    return false;
+                    return Boolean.FALSE;
                 }
 
                 if (!file.createNewFile()) {
                     Log_OC.d(TAG, file.getAbsolutePath() + " could not be created");
-                    return false;
+                    return Boolean.FALSE;
                 }
 
                 BufferedInputStream bis = new BufferedInputStream(getMethod.getResponseBodyAsStream());
@@ -113,7 +110,7 @@ public class PrintAsyncTask extends AsyncTask<Void, Void, Boolean> {
                 }
                 // Check if the file is completed
                 if (transferred != totalToTransfer) {
-                    return false;
+                    return Boolean.FALSE;
                 }
 
                 if (getMethod.getResponseBodyAsStream() != null) {
@@ -122,14 +119,18 @@ public class PrintAsyncTask extends AsyncTask<Void, Void, Boolean> {
             }
         } catch (IOException e) {
             Log_OC.e(TAG, "Error reading file", e);
+        } finally {
+            if (getMethod != null) {
+                getMethod.releaseConnection();
+            }
         }
 
-        return true;
+        return Boolean.TRUE;
     }
 
     @Override
     protected void onPostExecute(Boolean result) {
-        RichDocumentsWebView richDocumentsWebView = richDocumentsWebViewWeakReference.get();
+        RichDocumentsEditorWebView richDocumentsWebView = richDocumentsWebViewWeakReference.get();
         richDocumentsWebView.dismissLoadingDialog();
 
         PrintManager printManager = (PrintManager) richDocumentsWebView.getSystemService(PRINT_SERVICE);

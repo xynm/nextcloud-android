@@ -66,17 +66,17 @@ class ManualAsyncRunnerTest {
     @Test
     fun `tasks are queued`() {
         assertEquals(EMPTY, runner.size)
-        runner.post(task, onResult, onError)
-        runner.post(task, onResult, onError)
-        runner.post(task, onResult, onError)
+        runner.postQuickTask(task, onResult, onError)
+        runner.postQuickTask(task, onResult, onError)
+        runner.postQuickTask(task, onResult, onError)
         assertEquals("Expected 3 tasks to be enqueued", THREE_TASKS, runner.size)
     }
 
     @Test
     fun `run one enqueued task`() {
-        runner.post(task, onResult, onError)
-        runner.post(task, onResult, onError)
-        runner.post(task, onResult, onError)
+        runner.postQuickTask(task, onResult, onError)
+        runner.postQuickTask(task, onResult, onError)
+        runner.postQuickTask(task, onResult, onError)
 
         assertEquals("Queue should contain all enqueued tasks", THREE_TASKS, runner.size)
         val run = runner.runOne()
@@ -88,8 +88,8 @@ class ManualAsyncRunnerTest {
 
     @Test
     fun `run all enqueued tasks`() {
-        runner.post(task, onResult, onError)
-        runner.post(task, onResult, onError)
+        runner.postQuickTask(task, onResult, onError)
+        runner.postQuickTask(task, onResult, onError)
 
         assertEquals("Queue should contain all enqueued tasks", TWO_TASKS, runner.size)
         val count = runner.runAll()
@@ -115,11 +115,17 @@ class ManualAsyncRunnerTest {
         // WHEN
         //      one task is scheduled
         //      task callback schedules another task
-        runner.post(task, {
-            runner.post(task, {
-                runner.post(task)
-            })
-        })
+        runner.postQuickTask(
+            task,
+            {
+                runner.postQuickTask(
+                    task,
+                    {
+                        runner.postQuickTask(task)
+                    }
+                )
+            }
+        )
         assertEquals(ONE_TASK, runner.size)
 
         // WHEN
@@ -135,7 +141,7 @@ class ManualAsyncRunnerTest {
     fun `runner detects infinite loops caused by scheduling tasks recusively`() {
         val recursiveTask: () -> String = object : Function0<String> {
             override fun invoke(): String {
-                runner.post(this)
+                runner.postQuickTask(this)
                 return "result"
             }
         }
@@ -143,7 +149,7 @@ class ManualAsyncRunnerTest {
         // WHEN
         //      one task is scheduled
         //      task will schedule itself again, causing infinite loop
-        runner.post(recursiveTask)
+        runner.postQuickTask(recursiveTask)
 
         // WHEN
         //      runs all

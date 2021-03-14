@@ -62,7 +62,7 @@ class ThreadPoolAsyncRunnerTest {
         val latch = CountDownLatch(1)
         val callerThread = Thread.currentThread()
         var taskThread: Thread? = null
-        r.post({
+        r.postQuickTask({
             taskThread = Thread.currentThread()
             latch.countDown()
         })
@@ -79,9 +79,12 @@ class ThreadPoolAsyncRunnerTest {
         }.whenever(handler).post(any())
 
         val onResult: OnResultCallback<String> = mock()
-        r.post({
-            "result"
-        }, onResult = onResult)
+        r.postQuickTask(
+            {
+                "result"
+            },
+            onResult = onResult
+        )
         assertAwait(afterPostLatch)
         verify(onResult).invoke(eq("result"))
     }
@@ -96,9 +99,13 @@ class ThreadPoolAsyncRunnerTest {
 
         val onResult: OnResultCallback<String> = mock()
         val onError: OnErrorCallback = mock()
-        r.post({
-            throw IllegalArgumentException("whatever")
-        }, onResult = onResult, onError = onError)
+        r.postQuickTask(
+            {
+                throw IllegalArgumentException("whatever")
+            },
+            onResult = onResult,
+            onError = onError
+        )
         assertAwait(afterPostLatch)
         verify(onResult, never()).invoke(any())
         verify(onError).invoke(argThat { this is java.lang.IllegalArgumentException })
@@ -108,11 +115,15 @@ class ThreadPoolAsyncRunnerTest {
     fun `cancelled task does not return result`() {
         val taskIsCancelled = CountDownLatch(INIT_COUNT)
         val taskIsRunning = CountDownLatch(INIT_COUNT)
-        val t = r.post({
-            taskIsRunning.countDown()
-            taskIsCancelled.await()
-            "result"
-        }, onResult = {}, onError = {})
+        val t = r.postQuickTask(
+            {
+                taskIsRunning.countDown()
+                taskIsCancelled.await()
+                "result"
+            },
+            onResult = {},
+            onError = {}
+        )
         assertAwait(taskIsRunning)
         t.cancel()
         taskIsCancelled.countDown()
@@ -124,11 +135,15 @@ class ThreadPoolAsyncRunnerTest {
     fun `cancelled task does not return error`() {
         val taskIsCancelled = CountDownLatch(INIT_COUNT)
         val taskIsRunning = CountDownLatch(INIT_COUNT)
-        val t = r.post({
-            taskIsRunning.countDown()
-            taskIsCancelled.await()
-            throw IllegalStateException("whatever")
-        }, onResult = {}, onError = {})
+        val t = r.postQuickTask(
+            {
+                taskIsRunning.countDown()
+                taskIsCancelled.await()
+                throw IllegalStateException("whatever")
+            },
+            onResult = {},
+            onError = {}
+        )
         assertAwait(taskIsRunning)
         t.cancel()
         taskIsCancelled.countDown()

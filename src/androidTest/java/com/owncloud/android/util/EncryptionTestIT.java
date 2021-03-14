@@ -21,15 +21,18 @@
 
 package com.owncloud.android.util;
 
-import android.os.Build;
+import android.text.TextUtils;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import com.google.gson.reflect.TypeToken;
 import com.owncloud.android.datamodel.DecryptedFolderMetadata;
 import com.owncloud.android.datamodel.EncryptedFolderMetadata;
+import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.utils.CsrHelper;
 import com.owncloud.android.utils.EncryptionUtils;
+
+import net.bytebuddy.utility.RandomString;
 
 import org.apache.commons.io.FileUtils;
 import org.junit.Test;
@@ -46,17 +49,37 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Random;
 import java.util.Set;
 
-import androidx.annotation.RequiresApi;
 import androidx.test.runner.AndroidJUnit4;
 
 import static androidx.test.InstrumentationRegistry.getInstrumentation;
+import static com.owncloud.android.utils.EncryptionUtils.EncryptedFile;
+import static com.owncloud.android.utils.EncryptionUtils.decodeStringToBase64Bytes;
+import static com.owncloud.android.utils.EncryptionUtils.decryptFile;
+import static com.owncloud.android.utils.EncryptionUtils.decryptFolderMetaData;
+import static com.owncloud.android.utils.EncryptionUtils.decryptPrivateKey;
+import static com.owncloud.android.utils.EncryptionUtils.decryptStringAsymmetric;
+import static com.owncloud.android.utils.EncryptionUtils.decryptStringSymmetric;
+import static com.owncloud.android.utils.EncryptionUtils.deserializeJSON;
+import static com.owncloud.android.utils.EncryptionUtils.encodeBytesToBase64String;
+import static com.owncloud.android.utils.EncryptionUtils.encryptFile;
+import static com.owncloud.android.utils.EncryptionUtils.encryptFolderMetadata;
+import static com.owncloud.android.utils.EncryptionUtils.generateKey;
+import static com.owncloud.android.utils.EncryptionUtils.generateSHA512;
+import static com.owncloud.android.utils.EncryptionUtils.getMD5Sum;
+import static com.owncloud.android.utils.EncryptionUtils.ivDelimiter;
+import static com.owncloud.android.utils.EncryptionUtils.ivDelimiterOld;
+import static com.owncloud.android.utils.EncryptionUtils.ivLength;
+import static com.owncloud.android.utils.EncryptionUtils.randomBytes;
+import static com.owncloud.android.utils.EncryptionUtils.saltLength;
+import static com.owncloud.android.utils.EncryptionUtils.serializeJSON;
+import static com.owncloud.android.utils.EncryptionUtils.verifySHA512;
 import static junit.framework.Assert.assertFalse;
 import static junit.framework.Assert.assertTrue;
 import static org.junit.Assert.assertEquals;
 
-@RequiresApi(api = Build.VERSION_CODES.KITKAT)
 @RunWith(AndroidJUnit4.class)
 public class EncryptionTestIT {
     private String privateKey = "MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAo" +
@@ -110,42 +133,97 @@ public class EncryptionTestIT {
 
     @Test
     public void encryptStringAsymmetric() throws Exception {
-        byte[] key1 = EncryptionUtils.generateKey();
-        String base64encodedKey = EncryptionUtils.encodeBytesToBase64String(key1);
+        byte[] key1 = generateKey();
+        String base64encodedKey = encodeBytesToBase64String(key1);
 
         String encryptedString = EncryptionUtils.encryptStringAsymmetric(base64encodedKey, cert);
-        String decryptedString = EncryptionUtils.decryptStringAsymmetric(encryptedString, privateKey);
+        String decryptedString = decryptStringAsymmetric(encryptedString, privateKey);
 
-        byte[] key2 = EncryptionUtils.decodeStringToBase64Bytes(decryptedString);
+        byte[] key2 = decodeStringToBase64Bytes(decryptedString);
 
         assertTrue(Arrays.equals(key1, key2));
     }
 
     @Test
+    public void encryptStringSymmetricRandom() throws Exception {
+        int max = 500;
+        for (int i = 0; i < max; i++) {
+            Log_OC.d("EncryptionTestIT", i + " of " + max);
+            byte[] key = generateKey();
+
+            String encryptedString;
+            if (new Random().nextBoolean()) {
+                encryptedString = EncryptionUtils.encryptStringSymmetric(privateKey, key);
+            } else {
+                encryptedString = EncryptionUtils.encryptStringSymmetricOld(privateKey, key);
+
+                if (encryptedString.indexOf(ivDelimiterOld) != encryptedString.lastIndexOf(ivDelimiterOld)) {
+                    Log_OC.d("EncryptionTestIT", "skip due to duplicated iv (old system) -> ignoring");
+                    continue;
+                }
+            }
+            String decryptedString = decryptStringSymmetric(encryptedString, key);
+
+            assertEquals(privateKey, decryptedString);
+        }
+    }
+
+    @Test
     public void encryptStringSymmetric() throws Exception {
-        byte[] key = EncryptionUtils.generateKey();
+        int max = 5000;
+        byte[] key = generateKey();
 
-        String encryptedString = EncryptionUtils.encryptStringSymmetric(privateKey, key);
-        String decryptedString = EncryptionUtils.decryptStringSymmetric(encryptedString, key);
+        for (int i = 0; i < max; i++) {
+            Log_OC.d("EncryptionTestIT", i + " of " + max);
 
-        assertEquals(privateKey, decryptedString);
+            String encryptedString = EncryptionUtils.encryptStringSymmetric(privateKey, key);
+
+            int delimiterPosition = encryptedString.indexOf(ivDelimiter);
+            if (delimiterPosition == -1) {
+                throw new RuntimeException("IV not found!");
+            }
+
+            String ivString = encryptedString.substring(delimiterPosition + ivDelimiter.length());
+            if (TextUtils.isEmpty(ivString)) {
+                delimiterPosition = encryptedString.lastIndexOf(ivDelimiter);
+                ivString = encryptedString.substring(delimiterPosition + ivDelimiter.length());
+
+                if (TextUtils.isEmpty(ivString)) {
+                    throw new RuntimeException("IV string is empty");
+                }
+            }
+
+            String decryptedString = decryptStringSymmetric(encryptedString, key);
+
+            assertEquals(privateKey, decryptedString);
+        }
     }
 
     @Test
     public void encryptPrivateKey() throws Exception {
-        String keyPhrase = "moreovertelevisionfactorytendencyindependenceinternationalintellectualimpress" +
+        int max = 10;
+        for (int i = 0; i < max; i++) {
+            Log_OC.d("EncryptionTestIT", i + " of " + max);
+
+            String keyPhrase = "moreovertelevisionfactorytendencyindependenceinternationalintellectualimpress" +
                 "interestvolunteer";
-        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
-        keyGen.initialize(4096, new SecureRandom());
-        KeyPair keyPair = keyGen.generateKeyPair();
-        PrivateKey privateKey = keyPair.getPrivate();
-        byte[] privateKeyBytes = privateKey.getEncoded();
-        String privateKeyString = EncryptionUtils.encodeBytesToBase64String(privateKeyBytes);
+            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+            keyGen.initialize(4096, new SecureRandom());
+            KeyPair keyPair = keyGen.generateKeyPair();
+            PrivateKey privateKey = keyPair.getPrivate();
+            byte[] privateKeyBytes = privateKey.getEncoded();
+            String privateKeyString = encodeBytesToBase64String(privateKeyBytes);
 
-        String encryptedString = EncryptionUtils.encryptPrivateKey(privateKeyString, keyPhrase);
-        String decryptedString = EncryptionUtils.decryptPrivateKey(encryptedString, keyPhrase);
+            String encryptedString;
+            if (new Random().nextBoolean()) {
+                encryptedString = EncryptionUtils.encryptPrivateKey(privateKeyString, keyPhrase);
+            } else {
+                encryptedString = EncryptionUtils.encryptPrivateKeyOld(privateKeyString, keyPhrase);
+            }
+            String decryptedString = decryptPrivateKey(encryptedString, keyPhrase);
 
-        assertEquals(privateKeyString, decryptedString);
+            assertEquals(privateKeyString, decryptedString);
+        }
     }
 
     @Test
@@ -155,7 +233,7 @@ public class EncryptionTestIT {
         KeyPair keyPair = keyGen.generateKeyPair();
 
         assertFalse(CsrHelper.generateCsrPemEncodedString(keyPair, "").isEmpty());
-        assertFalse(EncryptionUtils.encodeBytesToBase64String(keyPair.getPublic().getEncoded()).isEmpty());
+        assertFalse(encodeBytesToBase64String(keyPair.getPublic().getEncoded()).isEmpty());
     }
 
     /**
@@ -167,31 +245,31 @@ public class EncryptionTestIT {
         DecryptedFolderMetadata decryptedFolderMetadata1 = generateFolderMetadata();
 
         // encrypt
-        EncryptedFolderMetadata encryptedFolderMetadata1 = EncryptionUtils.encryptFolderMetadata(
+        EncryptedFolderMetadata encryptedFolderMetadata1 = encryptFolderMetadata(
                 decryptedFolderMetadata1, privateKey);
 
         // serialize
-        String encryptedJson = EncryptionUtils.serializeJSON(encryptedFolderMetadata1);
+        String encryptedJson = serializeJSON(encryptedFolderMetadata1);
 
         // de-serialize
-        EncryptedFolderMetadata encryptedFolderMetadata2 = EncryptionUtils.deserializeJSON(encryptedJson,
-                new TypeToken<EncryptedFolderMetadata>() {
+        EncryptedFolderMetadata encryptedFolderMetadata2 = deserializeJSON(encryptedJson,
+                                                                           new TypeToken<EncryptedFolderMetadata>() {
                 });
 
         // decrypt
-        DecryptedFolderMetadata decryptedFolderMetadata2 = EncryptionUtils.decryptFolderMetaData(
+        DecryptedFolderMetadata decryptedFolderMetadata2 = decryptFolderMetaData(
                 encryptedFolderMetadata2, privateKey);
 
         // compare
-        assertTrue(compareJsonStrings(EncryptionUtils.serializeJSON(decryptedFolderMetadata1),
-                EncryptionUtils.serializeJSON(decryptedFolderMetadata2)));
+        assertTrue(compareJsonStrings(serializeJSON(decryptedFolderMetadata1),
+                                      serializeJSON(decryptedFolderMetadata2)));
     }
 
     @Test
     public void testCryptFileWithoutMetadata() throws Exception {
-        byte[] key = EncryptionUtils.decodeStringToBase64Bytes("WANM0gRv+DhaexIsI0T3Lg==");
-        byte[] iv = EncryptionUtils.decodeStringToBase64Bytes("gKm3n+mJzeY26q4OfuZEqg==");
-        byte[] authTag = EncryptionUtils.decodeStringToBase64Bytes("PboI9tqHHX3QeAA22PIu4w==");
+        byte[] key = decodeStringToBase64Bytes("WANM0gRv+DhaexIsI0T3Lg==");
+        byte[] iv = decodeStringToBase64Bytes("gKm3n+mJzeY26q4OfuZEqg==");
+        byte[] authTag = decodeStringToBase64Bytes("PboI9tqHHX3QeAA22PIu4w==");
 
         assertTrue(cryptFile("ia7OEEEyXMoRa1QWQk8r", "78f42172166f9dc8fd1a7156b1753353", key, iv, authTag));
     }
@@ -202,23 +280,102 @@ public class EncryptionTestIT {
 
         // n9WXAIXO2wRY4R8nXwmo
         assertTrue(cryptFile("ia7OEEEyXMoRa1QWQk8r",
-                "78f42172166f9dc8fd1a7156b1753353",
-                EncryptionUtils.decodeStringToBase64Bytes(metadata.getFiles().get("ia7OEEEyXMoRa1QWQk8r")
+                             "78f42172166f9dc8fd1a7156b1753353",
+                             decodeStringToBase64Bytes(metadata.getFiles().get("ia7OEEEyXMoRa1QWQk8r")
                         .getEncrypted().getKey()),
-                EncryptionUtils.decodeStringToBase64Bytes(metadata.getFiles().get("ia7OEEEyXMoRa1QWQk8r")
+                             decodeStringToBase64Bytes(metadata.getFiles().get("ia7OEEEyXMoRa1QWQk8r")
                         .getInitializationVector()),
-                EncryptionUtils.decodeStringToBase64Bytes(metadata.getFiles().get("ia7OEEEyXMoRa1QWQk8r")
+                             decodeStringToBase64Bytes(metadata.getFiles().get("ia7OEEEyXMoRa1QWQk8r")
                         .getAuthenticationTag())));
 
         // n9WXAIXO2wRY4R8nXwmo
         assertTrue(cryptFile("n9WXAIXO2wRY4R8nXwmo",
-                "825143ed1f21ebb0c3b3c3f005b2f5db",
-                EncryptionUtils.decodeStringToBase64Bytes(metadata.getFiles().get("n9WXAIXO2wRY4R8nXwmo")
+                             "825143ed1f21ebb0c3b3c3f005b2f5db",
+                             decodeStringToBase64Bytes(metadata.getFiles().get("n9WXAIXO2wRY4R8nXwmo")
                         .getEncrypted().getKey()),
-                EncryptionUtils.decodeStringToBase64Bytes(metadata.getFiles().get("n9WXAIXO2wRY4R8nXwmo")
+                             decodeStringToBase64Bytes(metadata.getFiles().get("n9WXAIXO2wRY4R8nXwmo")
                         .getInitializationVector()),
-                EncryptionUtils.decodeStringToBase64Bytes(metadata.getFiles().get("n9WXAIXO2wRY4R8nXwmo")
+                             decodeStringToBase64Bytes(metadata.getFiles().get("n9WXAIXO2wRY4R8nXwmo")
                         .getAuthenticationTag())));
+    }
+
+    @Test
+    public void bigMetadata() throws Exception {
+        DecryptedFolderMetadata decryptedFolderMetadata1 = generateFolderMetadata();
+
+        // encrypt
+        EncryptedFolderMetadata encryptedFolderMetadata1 = encryptFolderMetadata(
+            decryptedFolderMetadata1, privateKey);
+
+        // serialize
+        String encryptedJson = serializeJSON(encryptedFolderMetadata1);
+
+        // de-serialize
+        EncryptedFolderMetadata encryptedFolderMetadata2 = deserializeJSON(encryptedJson,
+                                                                           new TypeToken<EncryptedFolderMetadata>() {
+                                                                           });
+
+        // decrypt
+        DecryptedFolderMetadata decryptedFolderMetadata2 = decryptFolderMetaData(
+            encryptedFolderMetadata2, privateKey);
+
+        // compare
+        assertTrue(compareJsonStrings(serializeJSON(decryptedFolderMetadata1),
+                                      serializeJSON(decryptedFolderMetadata2)));
+
+        // prefill with 500
+        for (int i = 0; i < 500; i++) {
+            addFile(decryptedFolderMetadata1, i);
+        }
+
+        int max = 505;
+        for (int i = 500; i < max; i++) {
+            Log_OC.d(this, "Big metadata: " + i + " of " + max);
+
+            addFile(decryptedFolderMetadata1, i);
+
+            // encrypt
+            encryptedFolderMetadata1 = encryptFolderMetadata(decryptedFolderMetadata1, privateKey);
+
+            // serialize
+            encryptedJson = serializeJSON(encryptedFolderMetadata1);
+
+            // de-serialize
+            encryptedFolderMetadata2 = deserializeJSON(encryptedJson,
+                                                       new TypeToken<EncryptedFolderMetadata>() {
+                                                       });
+
+            // decrypt
+            decryptedFolderMetadata2 = decryptFolderMetaData(encryptedFolderMetadata2, privateKey);
+
+            // compare
+            assertTrue(compareJsonStrings(serializeJSON(decryptedFolderMetadata1),
+                                          serializeJSON(decryptedFolderMetadata2)));
+
+            assertEquals(i + 3, decryptedFolderMetadata1.getFiles().size());
+            assertEquals(i + 3, decryptedFolderMetadata2.getFiles().size());
+        }
+    }
+
+    private void addFile(DecryptedFolderMetadata decryptedFolderMetadata, int counter) {
+        // Add new file
+        // Always generate new
+        byte[] key = generateKey();
+        byte[] iv = randomBytes(ivLength);
+        byte[] authTag = randomBytes((128 / 8));
+
+        DecryptedFolderMetadata.Data data = new DecryptedFolderMetadata.Data();
+        data.setKey(EncryptionUtils.encodeBytesToBase64String(key));
+        data.setFilename(counter + ".txt");
+        data.setVersion(1);
+
+        DecryptedFolderMetadata.DecryptedFile file = new DecryptedFolderMetadata.DecryptedFile();
+        file.setInitializationVector(EncryptionUtils.encodeBytesToBase64String(iv));
+        file.setEncrypted(data);
+        file.setMetadataKey(0);
+        file.setAuthenticationTag(EncryptionUtils.encodeBytesToBase64String(authTag));
+
+        decryptedFolderMetadata.getFiles().put(RandomString.make(20), file);
     }
 
     /**
@@ -229,7 +386,7 @@ public class EncryptionTestIT {
         Set<String> keys = new HashSet<>();
 
         for (int i = 0; i < 50; i++) {
-            assertTrue(keys.add(EncryptionUtils.encodeBytesToBase64String(EncryptionUtils.generateKey())));
+            assertTrue(keys.add(encodeBytesToBase64String(generateKey())));
         }
     }
 
@@ -241,8 +398,8 @@ public class EncryptionTestIT {
         Set<String> ivs = new HashSet<>();
 
         for (int i = 0; i < 50; i++) {
-            assertTrue(ivs.add(EncryptionUtils.encodeBytesToBase64String(
-                    EncryptionUtils.randomBytes(EncryptionUtils.ivLength))));
+            assertTrue(ivs.add(encodeBytesToBase64String(
+                randomBytes(ivLength))));
         }
     }
 
@@ -254,8 +411,8 @@ public class EncryptionTestIT {
         Set<String> ivs = new HashSet<>();
 
         for (int i = 0; i < 50; i++) {
-            assertTrue(ivs.add(EncryptionUtils.encodeBytesToBase64String(
-                    EncryptionUtils.randomBytes(EncryptionUtils.saltLength))));
+            assertTrue(ivs.add(encodeBytesToBase64String(
+                randomBytes(saltLength))));
         }
     }
 
@@ -263,13 +420,13 @@ public class EncryptionTestIT {
     public void testSHA512() {
         // sent to 3rd party app in cleartext
         String token = "4ae5978bf5354cd284b539015d442141";
-        String salt = EncryptionUtils.encodeBytesToBase64String(EncryptionUtils.randomBytes(EncryptionUtils.saltLength));
+        String salt = encodeBytesToBase64String(randomBytes(saltLength));
 
         // stored in database
-        String hashedToken = EncryptionUtils.generateSHA512(token, salt);
+        String hashedToken = generateSHA512(token, salt);
 
         // check: use passed cleartext and salt to verify hashed token
-        assertTrue(EncryptionUtils.verifySHA512(hashedToken, token));
+        assertTrue(verifySHA512(hashedToken, token));
     }
 
 
@@ -289,9 +446,9 @@ public class EncryptionTestIT {
     }
 
     private DecryptedFolderMetadata generateFolderMetadata() throws Exception {
-        String metadataKey0 = EncryptionUtils.encodeBytesToBase64String(EncryptionUtils.generateKey());
-        String metadataKey1 = EncryptionUtils.encodeBytesToBase64String(EncryptionUtils.generateKey());
-        String metadataKey2 = EncryptionUtils.encodeBytesToBase64String(EncryptionUtils.generateKey());
+        String metadataKey0 = encodeBytesToBase64String(generateKey());
+        String metadataKey1 = encodeBytesToBase64String(generateKey());
+        String metadataKey2 = encodeBytesToBase64String(generateKey());
         HashMap<Integer, String> metadataKeys = new HashMap<>();
         metadataKeys.put(0, EncryptionUtils.encryptStringAsymmetric(metadataKey0, cert));
         metadataKeys.put(1, EncryptionUtils.encryptStringAsymmetric(metadataKey1, cert));
@@ -345,28 +502,28 @@ public class EncryptionTestIT {
     private boolean cryptFile(String fileName, String md5, byte[] key, byte[] iv, byte[] expectedAuthTag)
             throws Exception {
         File file = getFile(fileName);
-        assertEquals(md5, EncryptionUtils.getMD5Sum(file));
+        assertEquals(md5, getMD5Sum(file));
 
-        EncryptionUtils.EncryptedFile encryptedFile = EncryptionUtils.encryptFile(file, key, iv);
+        EncryptedFile encryptedFile = encryptFile(file, key, iv);
 
         File encryptedTempFile = File.createTempFile("file", "tmp");
         FileOutputStream fileOutputStream = new FileOutputStream(encryptedTempFile);
         fileOutputStream.write(encryptedFile.encryptedBytes);
         fileOutputStream.close();
 
-        byte[] authenticationTag = EncryptionUtils.decodeStringToBase64Bytes(encryptedFile.authenticationTag);
+        byte[] authenticationTag = decodeStringToBase64Bytes(encryptedFile.authenticationTag);
 
         // verify authentication tag
         assertTrue(Arrays.equals(expectedAuthTag, authenticationTag));
 
-        byte[] decryptedBytes = EncryptionUtils.decryptFile(encryptedTempFile, key, iv, authenticationTag);
+        byte[] decryptedBytes = decryptFile(encryptedTempFile, key, iv, authenticationTag);
 
         File decryptedFile = File.createTempFile("file", "dec");
         FileOutputStream fileOutputStream1 = new FileOutputStream(decryptedFile);
         fileOutputStream1.write(decryptedBytes);
         fileOutputStream1.close();
 
-        return md5.compareTo(EncryptionUtils.getMD5Sum(decryptedFile)) == 0;
+        return md5.compareTo(getMD5Sum(decryptedFile)) == 0;
     }
 
     private File getFile(String filename) throws IOException {

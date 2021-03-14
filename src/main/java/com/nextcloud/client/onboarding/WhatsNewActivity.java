@@ -23,7 +23,6 @@
  */
 package com.nextcloud.client.onboarding;
 
-import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
@@ -38,7 +37,8 @@ import com.owncloud.android.R;
 import com.owncloud.android.ui.adapter.FeaturesViewAdapter;
 import com.owncloud.android.ui.adapter.FeaturesWebViewAdapter;
 import com.owncloud.android.ui.whatsnew.ProgressIndicator;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeButtonUtils;
+import com.owncloud.android.utils.theme.ThemeUtils;
 
 import javax.inject.Inject;
 
@@ -86,7 +86,7 @@ public class WhatsNewActivity extends FragmentActivity implements ViewPager.OnPa
         mPager.addOnPageChangeListener(this);
 
         mForwardFinishButton = findViewById(R.id.forward);
-        ThemeUtils.colorImageButton(mForwardFinishButton, fontColor);
+        ThemeButtonUtils.colorImageButton(mForwardFinishButton, fontColor);
 
         mForwardFinishButton.setOnClickListener(view -> {
             if (mProgress.hasNextStep()) {
@@ -99,11 +99,7 @@ public class WhatsNewActivity extends FragmentActivity implements ViewPager.OnPa
             updateNextButtonIfNeeded();
         });
 
-        if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-            mForwardFinishButton.setBackground(null);
-        } else {
-            mForwardFinishButton.setBackgroundDrawable(null);
-        }
+        mForwardFinishButton.setBackground(null);
 
         mSkipButton = findViewById(R.id.skip);
         mSkipButton.setTextColor(fontColor);

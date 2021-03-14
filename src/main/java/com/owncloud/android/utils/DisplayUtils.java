@@ -4,9 +4,12 @@
  * @author Andy Scherzinger
  * @author Bartek Przybylski
  * @author David A. Velasco
+ * @author Chris Narkiewicz <hello@ezaquarii.com>
+ *
  * Copyright (C) 2011  Bartek Przybylski
  * Copyright (C) 2015 ownCloud Inc.
  * Copyright (C) 2016 Andy Scherzinger
+ * Copyright (C) 2020 Chris Narkiewicz <hello@ezaquarii.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
@@ -24,7 +27,6 @@
 
 package com.owncloud.android.utils;
 
-import android.accounts.Account;
 import android.accounts.AccountManager;
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -44,6 +46,7 @@ import android.text.style.StyleSpan;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.View;
+import android.widget.Toast;
 
 import com.bumptech.glide.GenericRequestBuilder;
 import com.bumptech.glide.Glide;
@@ -55,6 +58,8 @@ import com.bumptech.glide.request.target.Target;
 import com.caverock.androidsvg.SVG;
 import com.google.android.material.snackbar.Snackbar;
 import com.nextcloud.client.account.CurrentAccountProvider;
+import com.nextcloud.client.account.User;
+import com.nextcloud.client.network.ClientFactory;
 import com.owncloud.android.MainApp;
 import com.owncloud.android.R;
 import com.owncloud.android.datamodel.ArbitraryDataProvider;
@@ -64,11 +69,13 @@ import com.owncloud.android.lib.common.OwnCloudAccount;
 import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.ui.TextDrawable;
 import com.owncloud.android.ui.activity.FileDisplayActivity;
+import com.owncloud.android.ui.dialog.SortingOrderDialogFragment;
 import com.owncloud.android.ui.events.SearchEvent;
 import com.owncloud.android.ui.fragment.OCFileListFragment;
 import com.owncloud.android.utils.glide.CustomGlideUriLoader;
 import com.owncloud.android.utils.svg.SvgDecoder;
 import com.owncloud.android.utils.svg.SvgDrawableTranscoder;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
 
 import org.greenrobot.eventbus.EventBus;
 import org.parceler.Parcels;
@@ -83,18 +90,26 @@ import java.math.BigDecimal;
 import java.net.IDN;
 import java.nio.charset.Charset;
 import java.text.DateFormat;
-import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 import androidx.appcompat.widget.AppCompatDrawableManager;
+import androidx.core.content.res.ResourcesCompat;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentTransaction;
+
+import static com.owncloud.android.ui.dialog.SortingOrderDialogFragment.SORTING_ORDER_FRAGMENT;
+import static com.owncloud.android.utils.FileSortOrder.sort_a_to_z_id;
+import static com.owncloud.android.utils.FileSortOrder.sort_big_to_small_id;
+import static com.owncloud.android.utils.FileSortOrder.sort_new_to_old_id;
+import static com.owncloud.android.utils.FileSortOrder.sort_old_to_new_id;
+import static com.owncloud.android.utils.FileSortOrder.sort_small_to_big_id;
+import static com.owncloud.android.utils.FileSortOrder.sort_z_to_a_id;
 
 /**
  * A helper class for UI/display related operations.
@@ -159,7 +174,7 @@ public final class DisplayUtils {
             }
 
             return new BigDecimal(String.valueOf(result)).setScale(
-                    sizeScales[suffixIndex], BigDecimal.ROUND_HALF_UP) + " " + sizeSuffixes[suffixIndex];
+                sizeScales[suffixIndex], BigDecimal.ROUND_HALF_UP) + " " + sizeSuffixes[suffixIndex];
         }
     }
 
@@ -274,39 +289,18 @@ public final class DisplayUtils {
     }
 
     /**
-     * creates the display string for an account.
+     * Creates the display string for a user.
      *
-     * @param context the actual activity
-     * @param savedAccount the actual, saved account
-     * @param accountName the account name
-     * @param fallbackString String to be used in case of an error
      * @return the display string for the given account data
      */
-    public static String getAccountNameDisplayText(Context context, Account savedAccount, String accountName, String
-            fallbackString) {
-        try {
-            return new OwnCloudAccount(savedAccount, context).getDisplayName()
-                    + "@"
-                    + convertIdn(accountName.substring(accountName.lastIndexOf('@') + 1), false);
-        } catch (Exception e) {
-            Log_OC.w(TAG, "Couldn't get display name for account, using old style");
-            return fallbackString;
-        }
+    public static String getAccountNameDisplayText(User user) {
+        final OwnCloudAccount ocs = user.toOwnCloudAccount();
+        final String accountName = user.getAccountName();
+        return ocs.getDisplayName()
+                + "@"
+                + convertIdn(accountName.substring(accountName.lastIndexOf('@') + 1), false);
     }
 
-    /**
-     * converts an array of accounts into a set of account names.
-     *
-     * @param accountList the account array
-     * @return set of account names
-     */
-    public static Set<String> toAccountNameSet(Collection<Account> accountList) {
-        Set<String> actualAccounts = new HashSet<>(accountList.size());
-        for (Account account : accountList) {
-            actualAccounts.add(account.name);
-        }
-        return actualAccounts;
-    }
 
     /**
      * calculates the relative time string based on the given modification timestamp.
@@ -317,7 +311,16 @@ public final class DisplayUtils {
      */
     public static CharSequence getRelativeTimestamp(Context context, long modificationTimestamp) {
         return getRelativeDateTimeString(context, modificationTimestamp, DateUtils.SECOND_IN_MILLIS,
-                DateUtils.WEEK_IN_MILLIS, 0);
+                                         DateUtils.WEEK_IN_MILLIS, 0);
+    }
+
+    public static CharSequence getRelativeTimestamp(Context context, long modificationTimestamp, boolean showFuture) {
+        return getRelativeDateTimeString(context,
+                                         modificationTimestamp,
+                                         DateUtils.SECOND_IN_MILLIS,
+                                         DateUtils.WEEK_IN_MILLIS,
+                                         0,
+                                         showFuture);
     }
 
 
@@ -330,7 +333,7 @@ public final class DisplayUtils {
      */
     public static int getRelativeInfoColor(Context context, int relative) {
         if (relative < RELATIVE_THRESHOLD_WARNING) {
-            return ThemeUtils.primaryColor(context, true);
+            return ThemeColorUtils.primaryColor(context, true);
         } else {
             return context.getResources().getColor(R.color.infolevel_warning);
         }
@@ -338,15 +341,25 @@ public final class DisplayUtils {
 
     public static CharSequence getRelativeDateTimeString(Context c, long time, long minResolution,
                                                          long transitionResolution, int flags) {
+        return getRelativeDateTimeString(c, time, minResolution, transitionResolution, flags, false);
+    }
+
+    public static CharSequence getRelativeDateTimeString(Context c,
+                                                         long time,
+                                                         long minResolution,
+                                                         long transitionResolution,
+                                                         int flags,
+                                                         boolean showFuture) {
 
         CharSequence dateString = "";
 
         // in Future
-        if (time > System.currentTimeMillis()) {
+        if (!showFuture && time > System.currentTimeMillis()) {
             return DisplayUtils.unixTimeToHumanReadable(time);
         }
         // < 60 seconds -> seconds ago
-        else if ((System.currentTimeMillis() - time) < 60 * 1000 && minResolution == DateUtils.SECOND_IN_MILLIS) {
+        long diff = System.currentTimeMillis() - time;
+        if (diff > 0 && diff < 60 * 1000 && minResolution == DateUtils.SECOND_IN_MILLIS) {
             return c.getString(R.string.file_list_seconds_ago);
         } else {
             dateString = DateUtils.getRelativeDateTimeString(c, time, minResolution, transitionResolution, flags);
@@ -406,7 +419,7 @@ public final class DisplayUtils {
         }
 
         SpannableStringBuilder sb = new SpannableStringBuilder(text);
-        if(spanText == null) {
+        if (spanText == null) {
             return sb;
         }
 
@@ -430,46 +443,46 @@ public final class DisplayUtils {
     /**
      * fetches and sets the avatar of the given account in the passed callContext
      *
-     * @param account        the account to be used to connect to server
+     * @param user        the account to be used to connect to server
      * @param avatarRadius   the avatar radius
      * @param resources      reference for density information
      * @param callContext    which context is called to set the generated avatar
      */
-    public static void setAvatar(@NonNull Account account, AvatarGenerationListener listener,
+    public static void setAvatar(@NonNull User user, AvatarGenerationListener listener,
                                  float avatarRadius, Resources resources, Object callContext, Context context) {
 
         AccountManager accountManager = AccountManager.get(context);
-        String userId = accountManager.getUserData(account,
+        String userId = accountManager.getUserData(user.toPlatformAccount(),
                 com.owncloud.android.lib.common.accounts.AccountUtils.Constants.KEY_USER_ID);
 
-        setAvatar(account, userId, listener, avatarRadius, resources, callContext, context);
+        setAvatar(user, userId, listener, avatarRadius, resources, callContext, context);
     }
 
     /**
      * fetches and sets the avatar of the given account in the passed callContext
      *
-     * @param account        the account to be used to connect to server
+     * @param user        the account to be used to connect to server
      * @param userId         the userId which avatar should be set
      * @param avatarRadius   the avatar radius
      * @param resources      reference for density information
      * @param callContext    which context is called to set the generated avatar
      */
-    public static void setAvatar(@NonNull Account account, @NonNull String userId, AvatarGenerationListener listener,
+    public static void setAvatar(@NonNull User user, @NonNull String userId, AvatarGenerationListener listener,
                                  float avatarRadius, Resources resources, Object callContext, Context context) {
-        setAvatar(account, userId, userId, listener, avatarRadius, resources, callContext, context);
+        setAvatar(user, userId, userId, listener, avatarRadius, resources, callContext, context);
     }
 
     /**
      * fetches and sets the avatar of the given account in the passed callContext
      *
-     * @param account      the account to be used to connect to server
+     * @param user         the account to be used to connect to server
      * @param userId       the userId which avatar should be set
      * @param displayName  displayName used to generate avatar with first char, only used as fallback
      * @param avatarRadius the avatar radius
      * @param resources    reference for density information
      * @param callContext  which context is called to set the generated avatar
      */
-    public static void setAvatar(@NonNull Account account,
+    public static void setAvatar(@NonNull User user,
                                  @NonNull String userId,
                                  String displayName,
                                  AvatarGenerationListener listener,
@@ -478,12 +491,13 @@ public final class DisplayUtils {
                                  Object callContext,
                                  Context context) {
         if (callContext instanceof View) {
-            ((View) callContext).setContentDescription(String.valueOf(account.hashCode()));
+            ((View) callContext).setContentDescription(String.valueOf(user.toPlatformAccount().hashCode()));
         }
 
         ArbitraryDataProvider arbitraryDataProvider = new ArbitraryDataProvider(context.getContentResolver());
 
-        String serverName = account.name.substring(account.name.lastIndexOf('@') + 1);
+        final String accountName = user.getAccountName();
+        String serverName = accountName.substring(accountName.lastIndexOf('@') + 1);
         String eTag = arbitraryDataProvider.getValue(userId + "@" + serverName, ThumbnailsCacheManager.AVATAR);
         String avatarKey = "a_" + userId + "_" + serverName + "_" + eTag;
 
@@ -497,24 +511,30 @@ public final class DisplayUtils {
                 avatar = TextDrawable.createAvatarByUserId(displayName, avatarRadius);
             } catch (Exception e) {
                 Log_OC.e(TAG, "Error calculating RGB value for active account icon.", e);
-                avatar = resources.getDrawable(R.drawable.account_circle_white);
+                avatar = ResourcesCompat.getDrawable(resources,
+                                                     R.drawable.account_circle_white,
+                                                     null);
             }
         }
 
-        // check for new avatar, eTag is compared, so only new one is downloaded
-        if (ThumbnailsCacheManager.cancelPotentialAvatarWork(userId, callContext)) {
-            final ThumbnailsCacheManager.AvatarGenerationTask task =
-                new ThumbnailsCacheManager.AvatarGenerationTask(listener, callContext, account, resources,
-                                                                avatarRadius, userId, serverName, context);
+        listener.avatarGenerated(avatar, callContext);
 
-            final ThumbnailsCacheManager.AsyncAvatarDrawable asyncDrawable =
-                new ThumbnailsCacheManager.AsyncAvatarDrawable(resources, avatar, task);
-            listener.avatarGenerated(asyncDrawable, callContext);
-            task.execute(userId);
-        }
+        // check for new avatar, eTag is compared, so only new one is downloaded
+        final ThumbnailsCacheManager.AvatarGenerationTask task =
+            new ThumbnailsCacheManager.AvatarGenerationTask(listener,
+                                                            callContext,
+                                                            user,
+                                                            resources,
+                                                            avatarRadius,
+                                                            userId,
+                                                            serverName,
+                                                            context);
+
+        task.execute(userId);
     }
 
     public static void downloadIcon(CurrentAccountProvider currentAccountProvider,
+                                    ClientFactory clientFactory,
                                     Context context,
                                     String iconUrl,
                                     SimpleTarget imageView,
@@ -523,7 +543,8 @@ public final class DisplayUtils {
                                     int height) {
         try {
             if (iconUrl.endsWith(".svg")) {
-                downloadSVGIcon(currentAccountProvider, context, iconUrl, imageView, placeholder, width, height);
+                downloadSVGIcon(currentAccountProvider, clientFactory, context, iconUrl, imageView, placeholder, width,
+                                height);
             } else {
                 downloadPNGIcon(context, iconUrl, imageView, placeholder);
             }
@@ -534,16 +555,17 @@ public final class DisplayUtils {
 
     private static void downloadPNGIcon(Context context, String iconUrl, SimpleTarget imageView, int placeholder) {
         Glide
-                .with(context)
-                .load(iconUrl)
-                .centerCrop()
-                .placeholder(placeholder)
-                .error(placeholder)
-                .crossFade()
-                .into(imageView);
+            .with(context)
+            .load(iconUrl)
+            .centerCrop()
+            .placeholder(placeholder)
+            .error(placeholder)
+            .crossFade()
+            .into(imageView);
     }
 
     private static void downloadSVGIcon(CurrentAccountProvider currentAccountProvider,
+                                        ClientFactory clientFactory,
                                         Context context,
                                         String iconUrl,
                                         SimpleTarget imageView,
@@ -551,34 +573,34 @@ public final class DisplayUtils {
                                         int width,
                                         int height) {
         GenericRequestBuilder<Uri, InputStream, SVG, PictureDrawable> requestBuilder = Glide.with(context)
-            .using(new CustomGlideUriLoader(currentAccountProvider), InputStream.class)
-                .from(Uri.class)
-                .as(SVG.class)
-                .transcode(new SvgDrawableTranscoder(), PictureDrawable.class)
-                .sourceEncoder(new StreamEncoder())
-                .cacheDecoder(new FileToStreamDecoder<>(new SvgDecoder(height, width)))
-                .decoder(new SvgDecoder(height, width))
-                .placeholder(placeholder)
-                .error(placeholder)
-                .animate(android.R.anim.fade_in);
+            .using(new CustomGlideUriLoader(currentAccountProvider, clientFactory), InputStream.class)
+            .from(Uri.class)
+            .as(SVG.class)
+            .transcode(new SvgDrawableTranscoder(), PictureDrawable.class)
+            .sourceEncoder(new StreamEncoder())
+            .cacheDecoder(new FileToStreamDecoder<>(new SvgDecoder(height, width)))
+            .decoder(new SvgDecoder(height, width))
+            .placeholder(placeholder)
+            .error(placeholder)
+            .animate(android.R.anim.fade_in);
 
 
         Uri uri = Uri.parse(iconUrl);
         requestBuilder
-                .diskCacheStrategy(DiskCacheStrategy.SOURCE)
-                .load(uri)
-                .into(imageView);
+            .diskCacheStrategy(DiskCacheStrategy.SOURCE)
+            .load(uri)
+            .into(imageView);
     }
 
     public static Bitmap downloadImageSynchronous(Context context, String imageUrl) {
         try {
             return Glide.with(context)
-                    .load(imageUrl)
-                    .asBitmap()
-                    .diskCacheStrategy(DiskCacheStrategy.NONE)
-                    .skipMemoryCache(true)
-                    .into(Target.SIZE_ORIGINAL, Target.SIZE_ORIGINAL)
-                    .get();
+                .load(imageUrl)
+                .asBitmap()
+                .diskCacheStrategy(DiskCacheStrategy.NONE)
+                .skipMemoryCache(true)
+                .into(Target.SIZE_ORIGINAL, Target.SIZE_ORIGINAL)
+                .get();
         } catch (Exception e) {
             Log_OC.e(TAG, "Could not download image " + imageUrl);
             return null;
@@ -689,32 +711,32 @@ public final class DisplayUtils {
      */
     public static void showSnackMessage(Context context, View view, @StringRes int messageResource, Object... formatArgs) {
         Snackbar.make(
-                view,
-                String.format(context.getString(messageResource, formatArgs)),
-                Snackbar.LENGTH_LONG)
-                .show();
+            view,
+            String.format(context.getString(messageResource, formatArgs)),
+            Snackbar.LENGTH_LONG)
+            .show();
     }
 
     // Solution inspired by https://stackoverflow.com/questions/34936590/why-isnt-my-vector-drawable-scaling-as-expected
     // Copied from https://raw.githubusercontent.com/nextcloud/talk-android/8ec8606bc61878e87e3ac8ad32c8b72d4680013c/app/src/main/java/com/nextcloud/talk/utils/DisplayUtils.java
     // under GPL3
     public static void useCompatVectorIfNeeded() {
-            try {
-                @SuppressLint("RestrictedApi") AppCompatDrawableManager drawableManager = AppCompatDrawableManager.get();
-                Class<?> inflateDelegateClass = Class.forName("android.support.v7.widget.AppCompatDrawableManager$InflateDelegate");
-                Class<?> vdcInflateDelegateClass = Class.forName("android.support.v7.widget.AppCompatDrawableManager$VdcInflateDelegate");
+        try {
+            @SuppressLint("RestrictedApi") AppCompatDrawableManager drawableManager = AppCompatDrawableManager.get();
+            Class<?> inflateDelegateClass = Class.forName("android.support.v7.widget.AppCompatDrawableManager$InflateDelegate");
+            Class<?> vdcInflateDelegateClass = Class.forName("android.support.v7.widget.AppCompatDrawableManager$VdcInflateDelegate");
 
-                Constructor<?> constructor = vdcInflateDelegateClass.getDeclaredConstructor();
-                constructor.setAccessible(true);
-                Object vdcInflateDelegate = constructor.newInstance();
+            Constructor<?> constructor = vdcInflateDelegateClass.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            Object vdcInflateDelegate = constructor.newInstance();
 
-                Class<?> args[] = {String.class, inflateDelegateClass};
-                Method addDelegate = AppCompatDrawableManager.class.getDeclaredMethod("addDelegate", args);
-                addDelegate.setAccessible(true);
-                addDelegate.invoke(drawableManager, "vector", vdcInflateDelegate);
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to use reflection to enable proper vector scaling");
-            }
+            Class<?> args[] = {String.class, inflateDelegateClass};
+            Method addDelegate = AppCompatDrawableManager.class.getDeclaredMethod("addDelegate", args);
+            addDelegate.setAccessible(true);
+            addDelegate.invoke(drawableManager, "vector", vdcInflateDelegate);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to use reflection to enable proper vector scaling");
+        }
     }
 
     public static int convertDpToPixel(float dp, Context context) {
@@ -727,9 +749,9 @@ public final class DisplayUtils {
     static public void showServerOutdatedSnackbar(Activity activity, int length) {
         Snackbar.make(activity.findViewById(android.R.id.content),
                       R.string.outdated_server, length)
-                .setAction(R.string.dismiss, v -> {
-                })
-                .show();
+            .setAction(R.string.dismiss, v -> {
+            })
+            .show();
     }
 
     static public void startLinkIntent(Activity activity, @StringRes int link) {
@@ -742,6 +764,36 @@ public final class DisplayUtils {
             activity.startActivity(intent);
         } else {
             DisplayUtils.showSnackMessage(activity, error);
+        }
+    }
+
+    static public void showErrorAndFinishActivity(Activity activity, String errorMessage) {
+        Toast.makeText(activity, errorMessage, Toast.LENGTH_LONG).show();
+        activity.finish();
+    }
+
+    static public void openSortingOrderDialogFragment(FragmentManager supportFragmentManager, FileSortOrder sortOrder) {
+        FragmentTransaction fragmentTransaction = supportFragmentManager.beginTransaction();
+        fragmentTransaction.addToBackStack(null);
+
+        SortingOrderDialogFragment.newInstance(sortOrder).show(fragmentTransaction, SORTING_ORDER_FRAGMENT);
+    }
+
+    public static @StringRes int getSortOrderStringId(FileSortOrder sortOrder) {
+        switch (sortOrder.name) {
+            case sort_z_to_a_id:
+                return R.string.menu_item_sort_by_name_z_a;
+            case sort_new_to_old_id:
+                return R.string.menu_item_sort_by_date_newest_first;
+            case sort_old_to_new_id:
+                return R.string.menu_item_sort_by_date_oldest_first;
+            case sort_big_to_small_id:
+                return R.string.menu_item_sort_by_size_biggest_first;
+            case sort_small_to_big_id:
+                return R.string.menu_item_sort_by_size_smallest_first;
+            case sort_a_to_z_id:
+            default:
+                return R.string.menu_item_sort_by_name_a_z;
         }
     }
 }

@@ -23,71 +23,47 @@ package com.owncloud.android.operations;
 
 import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.lib.common.OwnCloudClient;
-import com.owncloud.android.lib.common.operations.RemoteOperation;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.lib.resources.files.FileUtils;
 import com.owncloud.android.lib.resources.shares.CreateShareRemoteOperation;
-import com.owncloud.android.lib.resources.shares.GetSharesForFileRemoteOperation;
 import com.owncloud.android.lib.resources.shares.OCShare;
 import com.owncloud.android.lib.resources.shares.ShareType;
 import com.owncloud.android.operations.common.SyncOperation;
 
 import java.util.ArrayList;
 
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-
 /**
  * Creates a new public share for a given file
  */
-@AllArgsConstructor
-@Getter
 public class CreateShareViaLinkOperation extends SyncOperation {
 
     private String path;
     private String password;
 
+    public CreateShareViaLinkOperation(String path, String password) {
+        this.path = path;
+        this.password = password;
+    }
+
     @Override
     protected RemoteOperationResult run(OwnCloudClient client) {
-        // Check if the share link already exists
-        RemoteOperation operation = new GetSharesForFileRemoteOperation(path, false, false);
-        RemoteOperationResult result = operation.execute(client);
-
-        // Create public link if doesn't exist yet
-        boolean publicShareExists = false;
-        if (result.isSuccess()) {
-            OCShare share;
-            for (int i=0 ; i<result.getData().size(); i++) {
-                share = (OCShare) result.getData().get(i);
-                if (ShareType.PUBLIC_LINK.equals(share.getShareType())) {
-                    publicShareExists = true;
-                    break;
-                }
-            }
-        }
-        if (!publicShareExists) {
-            CreateShareRemoteOperation createOp = new CreateShareRemoteOperation(
-                path,
-                    ShareType.PUBLIC_LINK,
-                    "",
-                    false,
-                password,
-                    OCShare.DEFAULT_PERMISSION
-            );
-            createOp.setGetShareDetails(true);
-            result = createOp.execute(client);
-        }
+        CreateShareRemoteOperation createOp = new CreateShareRemoteOperation(path,
+                                                                             ShareType.PUBLIC_LINK,
+                                                                             "",
+                                                                             false,
+                                                                             password,
+                                                                             OCShare.NO_PERMISSION);
+        createOp.setGetShareDetails(true);
+        RemoteOperationResult result = createOp.execute(client);
 
         if (result.isSuccess()) {
             if (result.getData().size() > 0) {
                 Object item = result.getData().get(0);
-                if (item instanceof  OCShare) {
+                if (item instanceof OCShare) {
                     updateData((OCShare) item);
                 } else {
                     ArrayList<Object> data = result.getData();
-                    result = new RemoteOperationResult(
-                        RemoteOperationResult.ResultCode.SHARE_NOT_FOUND
-                    );
+                    result = new RemoteOperationResult(RemoteOperationResult.ResultCode.SHARE_NOT_FOUND);
                     result.setData(data);
                 }
             } else {
@@ -110,11 +86,18 @@ public class CreateShareViaLinkOperation extends SyncOperation {
         getStorageManager().saveShare(share);
 
         // Update OCFile with data from share: ShareByLink  and publicLink
-        OCFile file = getStorageManager().getFileByPath(path);
-        if (file!=null) {
-            file.setPublicLink(share.getShareLink());
+        OCFile file = getStorageManager().getFileByEncryptedRemotePath(path);
+        if (file != null) {
             file.setSharedViaLink(true);
             getStorageManager().saveFile(file);
         }
+    }
+
+    public String getPath() {
+        return this.path;
+    }
+
+    public String getPassword() {
+        return this.password;
     }
 }

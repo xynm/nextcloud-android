@@ -9,7 +9,7 @@
  *
  * Copyright (C) 2015 ownCloud Inc.
  * Copyright (C) 2018 Andy Scherzinger
- * Copyright (C) 2019 Chris Narkiewicz <hello@ezaquarii.com>
+ * Copyright (C) 2020 Chris Narkiewicz <hello@ezaquarii.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2,
@@ -38,19 +38,22 @@ import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.StatFs;
 import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
 import android.webkit.MimeTypeMap;
 
-import com.evernote.android.job.JobRequest;
 import com.nextcloud.client.account.CurrentAccountProvider;
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.network.ConnectivityService;
+import com.nextcloud.java.util.Optional;
 import com.owncloud.android.MainApp;
 import com.owncloud.android.R;
 import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
+import com.owncloud.android.files.FileMenuFilter;
 import com.owncloud.android.files.StreamMediaFileOperation;
 import com.owncloud.android.files.services.FileDownloader.FileDownloaderBinder;
 import com.owncloud.android.files.services.FileUploader.FileUploaderBinder;
@@ -66,8 +69,11 @@ import com.owncloud.android.services.OperationsService;
 import com.owncloud.android.ui.activity.ConflictsResolveActivity;
 import com.owncloud.android.ui.activity.ExternalSiteWebView;
 import com.owncloud.android.ui.activity.FileActivity;
-import com.owncloud.android.ui.activity.RichDocumentsWebView;
+import com.owncloud.android.ui.activity.FileDisplayActivity;
+import com.owncloud.android.ui.activity.RichDocumentsEditorWebView;
 import com.owncloud.android.ui.activity.ShareActivity;
+import com.owncloud.android.ui.activity.TextEditorWebView;
+import com.owncloud.android.ui.dialog.SendFilesDialog;
 import com.owncloud.android.ui.dialog.SendShareDialog;
 import com.owncloud.android.ui.events.EncryptionEvent;
 import com.owncloud.android.ui.events.FavoriteEvent;
@@ -92,6 +98,7 @@ import java.util.Collection;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -112,6 +119,7 @@ public class FileOperationsHelper {
     private static final String FILE_EXTENSION_URL = "url";
     private static final String FILE_EXTENSION_DESKTOP = "desktop";
     private static final String FILE_EXTENSION_WEBLOC = "webloc";
+    public static final int SINGLE_LINK_SIZE = 1;
 
     private FileActivity fileActivity;
     private CurrentAccountProvider currentAccount;
@@ -192,13 +200,13 @@ public class FileOperationsHelper {
 
     public void startSyncForFileAndIntent(OCFile file, Intent intent) {
         new Thread(() -> {
-            Account account = fileActivity.getAccount();
+            User user = fileActivity.getUser().orElseThrow(RuntimeException::new);
             FileDataStorageManager storageManager = new FileDataStorageManager(fileActivity.getAccount(),
                                                                                fileActivity.getContentResolver());
 
             // check if file is in conflict (this is known due to latest folder refresh)
             if (file.isInConflict()) {
-                syncFile(file, account, storageManager);
+                syncFile(file, user, storageManager);
                 EventBus.getDefault().post(new SyncEventFinished(intent));
 
                 return;
@@ -213,8 +221,7 @@ public class FileOperationsHelper {
             }
 
             // if offline or walled garden, show old version with warning
-            if (connectivityService.getActiveNetworkType() == JobRequest.NetworkType.ANY ||
-                    connectivityService.isInternetWalled()) {
+            if (!connectivityService.getConnectivity().isConnected() || connectivityService.isInternetWalled()) {
                 DisplayUtils.showSnackMessage(fileActivity, R.string.file_not_synced);
                 EventBus.getDefault().post(new SyncEventFinished(intent));
 
@@ -223,33 +230,35 @@ public class FileOperationsHelper {
 
             // check for changed eTag
             CheckEtagRemoteOperation checkEtagOperation = new CheckEtagRemoteOperation(file.getRemotePath(),
-                file.getEtag());
-            RemoteOperationResult result = checkEtagOperation.execute(account, fileActivity);
+                                                                                       file.getEtag());
+            RemoteOperationResult result = checkEtagOperation.execute(user.toPlatformAccount(), fileActivity);
 
             // eTag changed, sync file
             if (result.getCode() == RemoteOperationResult.ResultCode.ETAG_CHANGED) {
-                syncFile(file, account, storageManager);
+                syncFile(file, user, storageManager);
             }
 
             EventBus.getDefault().post(new SyncEventFinished(intent));
         }).start();
     }
 
-    private void syncFile(OCFile file, Account account, FileDataStorageManager storageManager) {
+    private void syncFile(OCFile file, User user, FileDataStorageManager storageManager) {
         fileActivity.runOnUiThread(() -> fileActivity.showLoadingDialog(fileActivity.getResources()
                 .getString(R.string.sync_in_progress)));
 
-        SynchronizeFileOperation sfo = new SynchronizeFileOperation(file, null, account, true, fileActivity);
+        SynchronizeFileOperation sfo = new SynchronizeFileOperation(file, null, user, true, fileActivity);
         RemoteOperationResult result = sfo.execute(storageManager, fileActivity);
 
         if (result.getCode() == RemoteOperationResult.ResultCode.SYNC_CONFLICT) {
             // ISSUE 5: if the user is not running the app (this is a service!),
             // this can be very intrusive; a notification should be preferred
-            Intent i = new Intent(fileActivity, ConflictsResolveActivity.class);
-            i.setFlags(i.getFlags() | Intent.FLAG_ACTIVITY_NEW_TASK);
-            i.putExtra(ConflictsResolveActivity.EXTRA_FILE, file);
-            i.putExtra(ConflictsResolveActivity.EXTRA_ACCOUNT, account);
-            fileActivity.startActivity(i);
+            Intent intent = ConflictsResolveActivity.createIntent(file,
+                                                                  user.toPlatformAccount(),
+                                                                  -1,
+                                                                  Intent.FLAG_ACTIVITY_NEW_TASK,
+                                                                  fileActivity);
+
+            fileActivity.startActivity(intent);
         } else {
             if (file.isDown()) {
                 FileStorageUtils.checkIfFileFinishedSaving(file);
@@ -274,16 +283,23 @@ public class FileOperationsHelper {
                     queryIntentActivities(openFileWithIntent, PackageManager.GET_RESOLVED_FILTER);
 
             if (launchables.isEmpty()) {
-                Account account = fileActivity.getAccount();
-                OCCapability capability = fileActivity.getStorageManager().getCapability(account.name);
-                if (capability.getRichDocumentsMimeTypeList().contains(file.getMimeType()) &&
-                    android.os.Build.VERSION.SDK_INT >= RichDocumentsWebView.MINIMUM_API &&
-                    capability.getRichDocumentsDirectEditing().isTrue()) {
-                    openFileAsRichDocument(file, fileActivity);
-                    return;
+                Optional<User> optionalUser = fileActivity.getUser();
+
+                if (optionalUser.isPresent() && FileMenuFilter.isEditorAvailable(fileActivity.getContentResolver(),
+                                                                                 optionalUser.get(),
+                                                                                 file.getMimeType())) {
+                    openFileWithTextEditor(file, fileActivity);
                 } else {
-                    DisplayUtils.showSnackMessage(fileActivity, R.string.file_list_no_app_for_file_type);
-                    return;
+                    Account account = fileActivity.getAccount();
+                    OCCapability capability = fileActivity.getStorageManager().getCapability(account.name);
+                    if (capability.getRichDocumentsMimeTypeList().contains(file.getMimeType()) &&
+                        capability.getRichDocumentsDirectEditing().isTrue()) {
+                        openFileAsRichDocument(file, fileActivity);
+                        return;
+                    } else {
+                        DisplayUtils.showSnackMessage(fileActivity, R.string.file_list_no_app_for_file_type);
+                        return;
+                    }
                 }
             }
 
@@ -291,24 +307,25 @@ public class FileOperationsHelper {
             new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    Account account = currentAccount.getCurrentAccount();
+                    User user = currentAccount.getUser();
                     FileDataStorageManager storageManager =
-                            new FileDataStorageManager(account, fileActivity.getContentResolver());
+                            new FileDataStorageManager(user.toPlatformAccount(), fileActivity.getContentResolver());
                     // a fresh object is needed; many things could have occurred to the file
                     // since it was registered to observe again, assuming that local files
                     // are linked to a remote file AT MOST, SOMETHING TO BE DONE;
                     SynchronizeFileOperation sfo =
-                            new SynchronizeFileOperation(file, null, account, true, fileActivity);
+                            new SynchronizeFileOperation(file, null, user, true, fileActivity);
                     RemoteOperationResult result = sfo.execute(storageManager, fileActivity);
                     fileActivity.dismissLoadingDialog();
                     if (result.getCode() == RemoteOperationResult.ResultCode.SYNC_CONFLICT) {
                         // ISSUE 5: if the user is not running the app (this is a service!),
                         // this can be very intrusive; a notification should be preferred
-                        Intent i = new Intent(fileActivity, ConflictsResolveActivity.class);
-                        i.setFlags(i.getFlags() | Intent.FLAG_ACTIVITY_NEW_TASK);
-                        i.putExtra(ConflictsResolveActivity.EXTRA_FILE, file);
-                        i.putExtra(ConflictsResolveActivity.EXTRA_ACCOUNT, account);
-                        fileActivity.startActivity(i);
+                        Intent intent = ConflictsResolveActivity.createIntent(file,
+                                                                              user.toPlatformAccount(),
+                                                                              -1,
+                                                                              Intent.FLAG_ACTIVITY_NEW_TASK,
+                                                                              fileActivity);
+                        fileActivity.startActivity(intent);
                     } else {
                         if (!launchables.isEmpty()) {
                             try {
@@ -341,11 +358,28 @@ public class FileOperationsHelper {
     }
 
     public void openFileAsRichDocument(OCFile file, Context context) {
-        Intent collaboraWebViewIntent = new Intent(context, RichDocumentsWebView.class);
+        Intent collaboraWebViewIntent = new Intent(context, RichDocumentsEditorWebView.class);
         collaboraWebViewIntent.putExtra(ExternalSiteWebView.EXTRA_TITLE, "Collabora");
         collaboraWebViewIntent.putExtra(ExternalSiteWebView.EXTRA_FILE, file);
         collaboraWebViewIntent.putExtra(ExternalSiteWebView.EXTRA_SHOW_SIDEBAR, false);
         context.startActivity(collaboraWebViewIntent);
+    }
+
+    public void openFileWithTextEditor(OCFile file, Context context) {
+        Intent textEditorIntent = new Intent(context, TextEditorWebView.class);
+        textEditorIntent.putExtra(ExternalSiteWebView.EXTRA_TITLE, "Text");
+        textEditorIntent.putExtra(ExternalSiteWebView.EXTRA_FILE, file);
+        textEditorIntent.putExtra(ExternalSiteWebView.EXTRA_SHOW_SIDEBAR, false);
+        context.startActivity(textEditorIntent);
+    }
+
+    public void openRichWorkspaceWithTextEditor(OCFile file, String url, Context context) {
+        Intent textEditorIntent = new Intent(context, TextEditorWebView.class);
+        textEditorIntent.putExtra(ExternalSiteWebView.EXTRA_TITLE, "Text");
+        textEditorIntent.putExtra(ExternalSiteWebView.EXTRA_URL, url);
+        textEditorIntent.putExtra(ExternalSiteWebView.EXTRA_FILE, file);
+        textEditorIntent.putExtra(ExternalSiteWebView.EXTRA_SHOW_SIDEBAR, false);
+        context.startActivity(textEditorIntent);
     }
 
     @NonNull
@@ -397,10 +431,10 @@ public class FileOperationsHelper {
 
     public void streamMediaFile(OCFile file) {
         fileActivity.showLoadingDialog(fileActivity.getString(R.string.wait_a_moment));
-        final Account account = currentAccount.getCurrentAccount();
+        final User user = currentAccount.getUser();
         new Thread(() -> {
             StreamMediaFileOperation sfo = new StreamMediaFileOperation(file.getLocalId());
-            RemoteOperationResult result = sfo.execute(account, fileActivity);
+            RemoteOperationResult result = sfo.execute(user.toPlatformAccount(), fileActivity);
 
             fileActivity.dismissLoadingDialog();
 
@@ -425,7 +459,7 @@ public class FileOperationsHelper {
      * @param file     The file to share.
      * @param password Optional password to protect the public share.
      */
-    public void shareFileViaLink(OCFile file, String password) {
+    public void shareFileViaPublicShare(OCFile file, String password) {
         if (file != null) {
             fileActivity.showLoadingDialog(fileActivity.getString(R.string.wait_a_moment));
             Intent service = new Intent(fileActivity, OperationsService.class);
@@ -443,19 +477,19 @@ public class FileOperationsHelper {
         }
     }
 
-    public void getFileWithLink(OCFile file) {
-        if (file != null) {
-            fileActivity.showLoadingDialog(fileActivity.getApplicationContext().
-                    getString(R.string.wait_a_moment));
+    public void getFileWithLink(@NonNull OCFile file) {
+        List<OCShare> shares = fileActivity.getStorageManager().getSharesByPathAndType(file.getRemotePath(),
+                                                                                       ShareType.PUBLIC_LINK,
+                                                                                       "");
 
-            Intent service = new Intent(fileActivity, OperationsService.class);
-            service.setAction(OperationsService.ACTION_CREATE_SHARE_VIA_LINK);
-            service.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
-            service.putExtra(OperationsService.EXTRA_REMOTE_PATH, file.getRemotePath());
-            mWaitingForOpId = fileActivity.getOperationsServiceBinder().queueNewOperation(service);
-
+        if (shares.size() == SINGLE_LINK_SIZE) {
+            FileActivity.copyAndShareFileLink(fileActivity, file, shares.get(0).getShareLink());
         } else {
-            Log_OC.e(TAG, "Trying to share a NULL OCFile");
+            if (fileActivity instanceof FileDisplayActivity) {
+                ((FileDisplayActivity) fileActivity).showDetails(file, 1);
+            } else {
+                showShareFile(file);
+            }
         }
     }
 
@@ -508,33 +542,18 @@ public class FileOperationsHelper {
     }
 
     /**
-     * Helper method to unshare a file publicly shared via link.
-     * Starts a request to do it in {@link OperationsService}
+     * Helper method to unshare a file publicly shared via link. Starts a request to do it in {@link OperationsService}
      *
      * @param file The file to unshare.
      */
-    public void unshareFileViaLink(OCFile file) {
+    public void unshareShare(OCFile file, OCShare share) {
 
         // Unshare the file: Create the intent
         Intent unshareService = new Intent(fileActivity, OperationsService.class);
         unshareService.setAction(OperationsService.ACTION_UNSHARE);
         unshareService.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
         unshareService.putExtra(OperationsService.EXTRA_REMOTE_PATH, file.getRemotePath());
-        unshareService.putExtra(OperationsService.EXTRA_SHARE_TYPE, ShareType.PUBLIC_LINK);
-        unshareService.putExtra(OperationsService.EXTRA_SHARE_WITH, "");
-
-        queueShareIntent(unshareService);
-    }
-
-    public void unshareFileWithUserOrGroup(OCFile file, ShareType shareType, String userOrGroup) {
-
-        // Unshare the file: Create the intent
-        Intent unshareService = new Intent(fileActivity, OperationsService.class);
-        unshareService.setAction(OperationsService.ACTION_UNSHARE);
-        unshareService.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
-        unshareService.putExtra(OperationsService.EXTRA_REMOTE_PATH, file.getRemotePath());
-        unshareService.putExtra(OperationsService.EXTRA_SHARE_TYPE, shareType);
-        unshareService.putExtra(OperationsService.EXTRA_SHARE_WITH, userOrGroup);
+        unshareService.putExtra(OperationsService.EXTRA_SHARE_ID, share.getId());
 
         queueShareIntent(unshareService);
     }
@@ -558,22 +577,18 @@ public class FileOperationsHelper {
         fileActivity.startActivity(intent);
     }
 
-
     /**
-     * Updates a public share on a file to set its password.
-     * Starts a request to do it in {@link OperationsService}
+     * Updates a public share on a file to set its label. Starts a request to do it in {@link OperationsService}
      *
-     * @param file     File which public share will be protected with a password.
-     * @param password Password to set for the public link; null or empty string to clear
-     *                 the current password
+     * @param label new label
      */
-    public void setPasswordToShareViaLink(OCFile file, String password) {
+    public void setLabelToPublicShare(OCShare share, String label) {
         // Set password updating share
         Intent updateShareIntent = new Intent(fileActivity, OperationsService.class);
-        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_SHARE);
+        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_PUBLIC_SHARE);
         updateShareIntent.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
-        updateShareIntent.putExtra(OperationsService.EXTRA_REMOTE_PATH, file.getRemotePath());
-        updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PASSWORD, (password == null) ? "" : password);
+        updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_ID, share.getId());
+        updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PUBLIC_LABEL, (label == null) ? "" : label);
 
         queueShareIntent(updateShareIntent);
     }
@@ -588,33 +603,17 @@ public class FileOperationsHelper {
      */
     public void setPasswordToShare(OCShare share, String password) {
         Intent updateShareIntent = new Intent(fileActivity, OperationsService.class);
-        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_SHARE);
+        if (TextUtils.isEmpty(share.getShareLink())) {
+            updateShareIntent.setAction(OperationsService.ACTION_UPDATE_USER_SHARE);
+        } else {
+            updateShareIntent.setAction(OperationsService.ACTION_UPDATE_PUBLIC_SHARE);
+        }
         updateShareIntent.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
         updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_ID, share.getId());
-        updateShareIntent.putExtra(
-                OperationsService.EXTRA_SHARE_PASSWORD,
-                (password == null) ? "" : password
-        );
+        updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PASSWORD, (password == null) ? "" : password);
         queueShareIntent(updateShareIntent);
     }
 
-
-    /**
-     * Updates a public share on a file to set its expiration date.
-     * Starts a request to do it in {@link OperationsService}
-     *
-     * @param file                   File which public share will be constrained with an expiration date.
-     * @param expirationTimeInMillis Expiration date to set. A negative value clears the current expiration
-     *                               date, leaving the link unrestricted. Zero makes no change.
-     */
-    public void setExpirationDateToShareViaLink(OCFile file, long expirationTimeInMillis) {
-        Intent updateShareIntent = new Intent(fileActivity, OperationsService.class);
-        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_SHARE);
-        updateShareIntent.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
-        updateShareIntent.putExtra(OperationsService.EXTRA_REMOTE_PATH, file.getRemotePath());
-        updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_EXPIRATION_DATE_IN_MILLIS, expirationTimeInMillis);
-        queueShareIntent(updateShareIntent);
-    }
 
     /**
      * Updates a public share on a file to set its expiration date.
@@ -626,7 +625,7 @@ public class FileOperationsHelper {
      */
     public void setExpirationDateToShare(OCShare share, long expirationTimeInMillis) {
         Intent updateShareIntent = new Intent(fileActivity, OperationsService.class);
-        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_SHARE);
+        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_USER_SHARE);
         updateShareIntent.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
         updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_ID, share.getId());
         updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_EXPIRATION_DATE_IN_MILLIS, expirationTimeInMillis);
@@ -643,7 +642,7 @@ public class FileOperationsHelper {
      */
     public void setPermissionsToShare(OCShare share, int permissions) {
         Intent updateShareIntent = new Intent(fileActivity, OperationsService.class);
-        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_SHARE);
+        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_USER_SHARE);
         updateShareIntent.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
         updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_ID, share.getId());
         updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PERMISSIONS, permissions);
@@ -651,49 +650,31 @@ public class FileOperationsHelper {
     }
 
     /**
-     * Updates a public share on a folder to set its editing permission.
-     * Starts a request to do it in {@link OperationsService}
+     * Updates a public share on a folder to set its editing permission. Starts a request to do it in {@link
+     * OperationsService}
      *
-     * @param folder           Folder which editing permission of his public share will be modified.
+     * @param share            {@link OCShare} instance which permissions will be updated.
      * @param uploadPermission New state of the permission for editing the folder shared via link.
      */
-    public void setUploadPermissionsToShare(OCFile folder, boolean uploadPermission) {
+    public void setUploadPermissionsToPublicShare(OCShare share, boolean uploadPermission) {
         Intent updateShareIntent = new Intent(fileActivity, OperationsService.class);
-        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_SHARE);
-        updateShareIntent.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
-        updateShareIntent.putExtra(OperationsService.EXTRA_REMOTE_PATH, folder.getRemotePath());
-        updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PUBLIC_UPLOAD, uploadPermission);
-        queueShareIntent(updateShareIntent);
-    }
-
-    /**
-     * Updates a public share on a folder to set its hide file listing permission.
-     * Starts a request to do it in {@link OperationsService}
-     *
-     * @param share           {@link OCShare} instance which permissions will be updated.
-     * @param hideFileListing New state of the permission for editing the folder shared via link.
-     */
-    public void setHideFileListingPermissionsToShare(OCShare share, boolean hideFileListing) {
-        Intent updateShareIntent = new Intent(fileActivity, OperationsService.class);
-        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_SHARE);
+        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_USER_SHARE);
         updateShareIntent.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
         updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_ID, share.getId());
-
-        if (hideFileListing) {
-            updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PERMISSIONS, OCShare.CREATE_PERMISSION_FLAG);
+        if (uploadPermission) {
+            updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PERMISSIONS, 3);
         } else {
-            updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PERMISSIONS,
-                    OCShare.FEDERATED_PERMISSIONS_FOR_FOLDER_AFTER_OC9);
+            updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_PERMISSIONS, 1);
         }
 
         queueShareIntent(updateShareIntent);
     }
 
-    public void setHideFileDownloadPermissionsToShare(OCFile file, boolean hideFileDownload) {
+    public void setHideFileDownloadPermissionsToPublicShare(OCShare share, boolean hideFileDownload) {
         Intent updateShareIntent = new Intent(fileActivity, OperationsService.class);
-        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_SHARE);
+        updateShareIntent.setAction(OperationsService.ACTION_UPDATE_PUBLIC_SHARE);
         updateShareIntent.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
-        updateShareIntent.putExtra(OperationsService.EXTRA_REMOTE_PATH, file.getRemotePath());
+        updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_ID, share.getId());
         updateShareIntent.putExtra(OperationsService.EXTRA_SHARE_HIDE_FILE_DOWNLOAD, hideFileDownload);
 
         queueShareIntent(updateShareIntent);
@@ -721,14 +702,18 @@ public class FileOperationsHelper {
         mSendShareDialog.show(ft, "TAG_SEND_SHARE_DIALOG");
     }
 
-    public void sendShareFile(OCFile file) {
-        sendShareFile(file, !file.canReshare());
+    public void sendFiles(Set<OCFile> files) {
+        // Show dialog
+        FragmentManager fm = fileActivity.getSupportFragmentManager();
+        FragmentTransaction ft = fm.beginTransaction();
+        ft.addToBackStack(null);
+
+        SendFilesDialog sendFilesDialog = SendFilesDialog.newInstance(files);
+        sendFilesDialog.show(ft, "TAG_SEND_SHARE_DIALOG");
     }
 
-    public void syncFiles(Collection<OCFile> files) {
-        for (OCFile file : files) {
-            syncFile(file);
-        }
+    public void sendShareFile(OCFile file) {
+        sendShareFile(file, !file.canReshare());
     }
 
     public void sendCachedImage(OCFile file, String packageName, String activityName) {
@@ -740,7 +725,7 @@ public class FileOperationsHelper {
             sendIntent.setComponent(new ComponentName(packageName, activityName));
             sendIntent.putExtra(Intent.EXTRA_STREAM, Uri.parse("content://" +
                     context.getResources().getString(R.string.image_cache_provider_authority) +
-                    file.getRemotePath()));
+                                                                   file.getRemotePath()));
             sendIntent.putExtra(Intent.ACTION_SEND, true);      // Send Action
             sendIntent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
@@ -771,7 +756,7 @@ public class FileOperationsHelper {
                 } else {
                     uri = Uri.parse(UriUtils.URI_CONTENT_SCHEME +
                             context.getResources().getString(R.string.image_cache_provider_authority) +
-                            file.getRemotePath());
+                                        file.getRemotePath());
                 }
 
                 intent.setDataAndType(uri, file.getMimeType());
@@ -836,8 +821,10 @@ public class FileOperationsHelper {
 
     public void toggleEncryption(OCFile file, boolean shouldBeEncrypted) {
         if (file.isEncrypted() != shouldBeEncrypted) {
-            EventBus.getDefault().post(new EncryptionEvent(file.getLocalId(), file.getRemoteId(), file.getRemotePath(),
-                    shouldBeEncrypted));
+            EventBus.getDefault().post(new EncryptionEvent(file.getLocalId(),
+                                                           file.getRemoteId(),
+                                                           file.getRemotePath(),
+                                                           shouldBeEncrypted));
         }
     }
 
@@ -868,7 +855,7 @@ public class FileOperationsHelper {
             Intent service = new Intent(fileActivity, OperationsService.class);
             service.setAction(OperationsService.ACTION_REMOVE);
             service.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
-            service.putExtra(OperationsService.EXTRA_REMOTE_PATH, file.getRemotePath());
+            service.putExtra(OperationsService.EXTRA_FILE, file);
             service.putExtra(OperationsService.EXTRA_REMOVE_ONLY_LOCAL, onlyLocalCopy);
             service.putExtra(OperationsService.EXTRA_IN_BACKGROUND, inBackground);
             mWaitingForOpId = fileActivity.getOperationsServiceBinder().queueNewOperation(service);
@@ -880,13 +867,12 @@ public class FileOperationsHelper {
     }
 
 
-    public void createFolder(String remotePath, boolean createFullPath) {
+    public void createFolder(String remotePath) {
         // Create Folder
         Intent service = new Intent(fileActivity, OperationsService.class);
         service.setAction(OperationsService.ACTION_CREATE_FOLDER);
         service.putExtra(OperationsService.EXTRA_ACCOUNT, fileActivity.getAccount());
         service.putExtra(OperationsService.EXTRA_REMOTE_PATH, remotePath);
-        service.putExtra(OperationsService.EXTRA_CREATE_FULL_PATH, createFullPath);
         mWaitingForOpId = fileActivity.getOperationsServiceBinder().queueNewOperation(service);
 
         fileActivity.showLoadingDialog(fileActivity.getString(R.string.wait_a_moment));
@@ -898,23 +884,23 @@ public class FileOperationsHelper {
      * @param file OCFile
      */
     public void cancelTransference(OCFile file) {
-        Account account = fileActivity.getAccount();
+        User currentUser = fileActivity.getUser().orElseThrow(IllegalStateException::new);
         if (file.isFolder()) {
             OperationsService.OperationsServiceBinder opsBinder =
                     fileActivity.getOperationsServiceBinder();
             if (opsBinder != null) {
-                opsBinder.cancel(account, file);
+                opsBinder.cancel(currentUser.toPlatformAccount(), file);
             }
         }
 
         // for both files and folders
         FileDownloaderBinder downloaderBinder = fileActivity.getFileDownloaderBinder();
-        if (downloaderBinder != null && downloaderBinder.isDownloading(account, file)) {
-            downloaderBinder.cancel(account, file);
+        if (downloaderBinder != null && downloaderBinder.isDownloading(currentUser, file)) {
+            downloaderBinder.cancel(currentUser.toPlatformAccount(), file);
         }
         FileUploaderBinder uploaderBinder = fileActivity.getFileUploaderBinder();
-        if (uploaderBinder != null && uploaderBinder.isUploading(account, file)) {
-            uploaderBinder.cancel(account, file);
+        if (uploaderBinder != null && uploaderBinder.isUploading(currentUser, file)) {
+            uploaderBinder.cancel(currentUser.toPlatformAccount(), file);
         }
     }
 
@@ -980,8 +966,6 @@ public class FileOperationsHelper {
     public void uploadFromCamera(Activity activity, int requestCode) {
         Intent pictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
 
-        deleteOldFiles(activity);
-
         File photoFile = createImageFile(activity);
 
         Uri photoUri = FileProvider.getUriForFile(activity.getApplicationContext(),
@@ -999,18 +983,6 @@ public class FileOperationsHelper {
         }
     }
 
-    private void deleteOldFiles(Activity activity) {
-        File storageDir = activity.getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-
-        if (storageDir != null) {
-            for (File file : storageDir.listFiles()) {
-                if (!file.delete()) {
-                    Log_OC.d(this, "Failed to delete: " + file.getAbsolutePath());
-                }
-            }
-        }
-    }
-
     public static File createImageFile(Activity activity) {
         File storageDir = activity.getExternalFilesDir(Environment.DIRECTORY_PICTURES);
 
@@ -1021,5 +993,17 @@ public class FileOperationsHelper {
         return new SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.US).format(new Date()) + ".jpg";
     }
 
+    /**
+     * @return -1 if no space could computed, otherwise available space in bytes
+     */
+    public static Long getAvailableSpaceOnDevice() {
+        StatFs stat;
+        try {
+            stat = new StatFs(MainApp.getStoragePath());
+        } catch (NullPointerException | IllegalArgumentException e) {
+            return -1L;
+        }
 
+        return stat.getBlockSizeLong() * stat.getAvailableBlocksLong();
+    }
 }

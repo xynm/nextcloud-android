@@ -28,11 +28,24 @@ tests/proguard-project.txt
 
 # Android Studio and Gradle specific entries
 .gradle
-.idea
-*.iml
+.idea/*
+!.idea/codeStyles/
 build
 /gradle.properties
 .attach_pid*
 fastlane/Fastfile
 *.hprof
 
+# fastlane specific
+**/fastlane/report.xml
+
+# deliver temporary files
+**/fastlane/Preview.html
+
+# snapshot generated screenshots
+**/fastlane/screenshots
+
+# scan temporary files
+**/fastlane/test_output
+/fastlane/vendor/
+/.bundle/

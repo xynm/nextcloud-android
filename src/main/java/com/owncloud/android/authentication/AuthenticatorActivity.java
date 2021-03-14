@@ -52,8 +52,7 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.Rect;
-import android.graphics.drawable.Drawable;
+import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslCertificate;
 import android.net.http.SslError;
@@ -62,36 +61,25 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.preference.PreferenceManager;
-import android.provider.DocumentsContract;
-import android.text.Editable;
-import android.text.InputType;
 import android.text.TextUtils;
-import android.text.TextWatcher;
 import android.util.AndroidRuntimeException;
 import android.view.KeyEvent;
-import android.view.MotionEvent;
 import android.view.View;
-import android.view.View.OnFocusChangeListener;
-import android.view.View.OnTouchListener;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
 import android.webkit.CookieSyncManager;
-import android.webkit.HttpAuthHandler;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.EditText;
-import android.widget.ImageButton;
-import android.widget.ImageView;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.TextView.OnEditorActionListener;
 import android.widget.Toast;
 
 import com.blikoon.qrcodescanner.QrCodeActivity;
 import com.google.android.material.snackbar.Snackbar;
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
 import com.nextcloud.client.device.DeviceInfo;
 import com.nextcloud.client.di.Injectable;
@@ -100,7 +88,11 @@ import com.nextcloud.client.onboarding.OnboardingService;
 import com.nextcloud.client.preferences.AppPreferences;
 import com.owncloud.android.MainApp;
 import com.owncloud.android.R;
+import com.owncloud.android.databinding.AccountSetupBinding;
+import com.owncloud.android.databinding.AccountSetupWebviewBinding;
 import com.owncloud.android.lib.common.OwnCloudAccount;
+import com.owncloud.android.lib.common.OwnCloudClient;
+import com.owncloud.android.lib.common.OwnCloudClientFactory;
 import com.owncloud.android.lib.common.OwnCloudClientManagerFactory;
 import com.owncloud.android.lib.common.OwnCloudCredentials;
 import com.owncloud.android.lib.common.OwnCloudCredentialsFactory;
@@ -114,20 +106,24 @@ import com.owncloud.android.lib.common.operations.RemoteOperation;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult.ResultCode;
 import com.owncloud.android.lib.common.utils.Log_OC;
+import com.owncloud.android.lib.resources.status.GetCapabilitiesRemoteOperation;
+import com.owncloud.android.lib.resources.status.OCCapability;
 import com.owncloud.android.lib.resources.status.OwnCloudVersion;
 import com.owncloud.android.lib.resources.users.GetUserInfoRemoteOperation;
 import com.owncloud.android.operations.DetectAuthenticationMethodOperation.AuthenticationMethod;
 import com.owncloud.android.operations.GetServerInfoOperation;
+import com.owncloud.android.providers.DocumentsStorageProvider;
 import com.owncloud.android.services.OperationsService;
 import com.owncloud.android.services.OperationsService.OperationsServiceBinder;
 import com.owncloud.android.ui.activity.FileDisplayActivity;
-import com.owncloud.android.ui.dialog.CredentialsDialogFragment;
 import com.owncloud.android.ui.dialog.IndeterminateProgressDialog;
 import com.owncloud.android.ui.dialog.SslUntrustedCertDialog;
 import com.owncloud.android.ui.dialog.SslUntrustedCertDialog.OnSslUntrustedCertListener;
 import com.owncloud.android.utils.DisplayUtils;
 import com.owncloud.android.utils.ErrorMessageAdapter;
 import com.owncloud.android.utils.PermissionUtil;
+import com.owncloud.android.utils.theme.ThemeDrawableUtils;
+import com.owncloud.android.utils.theme.ThemeToolbarUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -136,27 +132,31 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
 import javax.inject.Inject;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import androidx.fragment.app.DialogFragment;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentTransaction;
 import de.cotech.hw.fido.WebViewFidoBridge;
+import de.cotech.hw.fido.ui.FidoDialogOptions;
+import de.cotech.hw.fido2.WebViewWebauthnBridge;
+import de.cotech.hw.fido2.ui.WebauthnDialogOptions;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 /**
  * This Activity is used to add an ownCloud account to the App
  */
 public class AuthenticatorActivity extends AccountAuthenticatorActivity
-    implements OnRemoteOperationListener, OnFocusChangeListener, OnEditorActionListener, OnSslUntrustedCertListener,
+    implements OnRemoteOperationListener, OnEditorActionListener, OnSslUntrustedCertListener,
     AuthenticatorAsyncTask.OnAuthenticatorTaskListener, Injectable {
 
     private static final String TAG = AuthenticatorActivity.class.getSimpleName();
@@ -167,24 +167,20 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
 
     private static final String KEY_HOST_URL_TEXT = "HOST_URL_TEXT";
     private static final String KEY_OC_VERSION = "OC_VERSION";
-    private static final String KEY_SERVER_VALID = "SERVER_VALID";
-    private static final String KEY_SERVER_CHECKED = "SERVER_CHECKED";
     private static final String KEY_SERVER_STATUS_TEXT = "SERVER_STATUS_TEXT";
     private static final String KEY_SERVER_STATUS_ICON = "SERVER_STATUS_ICON";
     private static final String KEY_IS_SSL_CONN = "IS_SSL_CONN";
-    private static final String KEY_PASSWORD_EXPOSED = "PASSWORD_VISIBLE";
     private static final String KEY_AUTH_STATUS_TEXT = "AUTH_STATUS_TEXT";
     private static final String KEY_AUTH_STATUS_ICON = "AUTH_STATUS_ICON";
     private static final String KEY_SERVER_AUTH_METHOD = "SERVER_AUTH_METHOD";
     private static final String KEY_WAITING_FOR_OP_ID = "WAITING_FOR_OP_ID";
-    private static final String KEY_AUTH_TOKEN = "AUTH_TOKEN";
+    private static final String KEY_ONLY_ADD = "onlyAdd";
 
     public static final byte ACTION_CREATE = 0;
     public static final byte ACTION_UPDATE_EXPIRED_TOKEN = 2;       // detected by the app
 
     private static final String UNTRUSTED_CERT_DIALOG_TAG = "UNTRUSTED_CERT_DIALOG";
     private static final String WAIT_DIALOG_TAG = "WAIT_DIALOG";
-    private static final String CREDENTIALS_DIALOG_TAG = "CREDENTIALS_DIALOG";
     private static final String KEY_AUTH_IS_FIRST_ATTEMPT_TAG = "KEY_AUTH_IS_FIRST_ATTEMPT";
 
     private static final String KEY_USERNAME = "USERNAME";
@@ -202,7 +198,6 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
     private static final int REQUEST_CODE_QR_SCAN = 101;
     public static final int REQUEST_CODE_FIRST_RUN = 102;
 
-
     /// parameters from EXTRAs in starter Intent
     private byte mAction;
     private Account mAccount;
@@ -214,35 +209,21 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
     private AccountManager mAccountMgr;
 
     /// Server PRE-Fragment elements
-    private EditText mHostUrlInput;
-    private View mRefreshButton;
-    private TextView mServerStatusView;
-    private ImageView scanQR;
+    private AccountSetupBinding accountSetupBinding;
+    private AccountSetupWebviewBinding accountSetupWebviewBinding;
 
-    private TextWatcher mHostUrlInputWatcher;
     private String mServerStatusText = EMPTY_STRING;
     private int mServerStatusIcon;
-
-    private boolean mServerIsChecked;
-    private boolean mServerIsValid;
 
     private GetServerInfoOperation.ServerInfo mServerInfo = new GetServerInfoOperation.ServerInfo();
 
     /// Authentication PRE-Fragment elements
-    private EditText mUsernameInput;
-    private EditText mPasswordInput;
-    private View mOkButton;
-    private TextView mAuthStatusView;
-    private ImageButton mTestServerButton;
-
-    private WebView mLoginWebView;
-
-    private WebViewFidoBridge webViewFidoBridge;
+    private WebViewFidoBridge webViewFidoU2fBridge;
+    private WebViewWebauthnBridge webViewWebauthnBridge;
 
     private String mAuthStatusText = EMPTY_STRING;
     private int mAuthStatusIcon;
 
-    private String mAuthToken = EMPTY_STRING;
     private AuthenticatorAsyncTask mAsyncTask;
 
     private boolean mIsFirstAuthAttempt;
@@ -250,24 +231,30 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
     /// Identifier of operation in progress which result shouldn't be lost
     private long mWaitingForOpId = Long.MAX_VALUE;
 
-    private boolean webViewLoginMethod;
+    private boolean showWebViewLoginUrl;
     private String webViewUser;
     private String webViewPassword;
-    private boolean forceOldLoginMethod;
 
     @Inject UserAccountManager accountManager;
     @Inject AppPreferences preferences;
     @Inject OnboardingService onboarding;
     @Inject DeviceInfo deviceInfo;
+    private boolean onlyAdd = false;
+    @SuppressLint("ResourceAsColor") @ColorInt
+    private int primaryColor = R.color.primary;
+
+    @VisibleForTesting
+    public AccountSetupBinding getAccountSetupBinding() {
+        return accountSetupBinding;
+    }
 
     /**
      * {@inheritDoc}
-     *
+     * <p>
      * IMPORTANT ENTRY POINT 1: activity is shown to the user
      */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        //Log_OC.e(TAG,  "onCreate init");
         super.onCreate(savedInstanceState);
 
         Uri data = getIntent().getData();
@@ -275,6 +262,8 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         if (savedInstanceState == null && !directLogin) {
             onboarding.launchFirstRunIfNeeded(this);
         }
+
+        onlyAdd = getIntent().getBooleanExtra(KEY_ONLY_ADD, false) || checkIfViaSSO(getIntent());
 
         // delete cookies for webView
         deleteCookies();
@@ -308,40 +297,32 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         }
 
         String webloginUrl = null;
-        boolean showLegacyLogin;
+        boolean webViewLoginMethod;
         if (getIntent().getBooleanExtra(EXTRA_USE_PROVIDER_AS_WEBLOGIN, false)) {
             webViewLoginMethod = true;
             webloginUrl = getString(R.string.provider_registration_server);
-            showLegacyLogin = false;
         } else {
             webViewLoginMethod = !TextUtils.isEmpty(getResources().getString(R.string.webview_login_url));
-            showLegacyLogin = true;
-        }
-
-        if (webViewLoginMethod) {
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            showWebViewLoginUrl = getResources().getBoolean(R.bool.show_server_url_input);
         }
 
         /// load user interface
-        if (!webViewLoginMethod) {
-            setContentView(R.layout.account_setup);
+        if (webViewLoginMethod) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            accountSetupWebviewBinding = AccountSetupWebviewBinding.inflate(getLayoutInflater());
+            setContentView(accountSetupWebviewBinding.getRoot());
+            initWebViewLogin(webloginUrl, false);
+        } else {
+            accountSetupBinding = AccountSetupBinding.inflate(getLayoutInflater());
+            setContentView(accountSetupBinding.getRoot());
 
             /// initialize general UI elements
             initOverallUi();
-
-            findViewById(R.id.centeredRefreshButton).setOnClickListener(v -> checkOcServer());
-
-            findViewById(R.id.embeddedRefreshButton).setOnClickListener(v -> checkOcServer());
 
             /// initialize block to be moved to single Fragment to check server and get info about it
 
             /// initialize block to be moved to single Fragment to retrieve and validate credentials
             initAuthorizationPreFragment(savedInstanceState);
-
-        } else {
-            setContentView(R.layout.account_setup_webview);
-            mLoginWebView = findViewById(R.id.login_webview);
-            initWebViewLogin(webloginUrl, showLegacyLogin, false);
         }
 
         initServerPreFragment(savedInstanceState);
@@ -350,13 +331,7 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
     private void deleteCookies() {
         try {
             CookieSyncManager.createInstance(this);
-            CookieManager cookieManager = CookieManager.getInstance();
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                cookieManager.removeAllCookies(null);
-            } else {
-                cookieManager.removeAllCookie();
-            }
+            CookieManager.getInstance().removeAllCookies(null);
         } catch (AndroidRuntimeException e) {
             Log_OC.e(TAG, e.getMessage());
         }
@@ -367,25 +342,35 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             Build.MANUFACTURER.substring(1).toLowerCase(Locale.getDefault()) + " " + Build.MODEL + " (Android)";
     }
 
+    @SuppressFBWarnings("ANDROID_WEB_VIEW_JAVASCRIPT")
     @SuppressLint("SetJavaScriptEnabled")
-    private void initWebViewLogin(String baseURL, boolean showLegacyLogin, boolean useGenericUserAgent) {
-        mLoginWebView.setVisibility(View.GONE);
+    private void initWebViewLogin(String baseURL, boolean useGenericUserAgent) {
+        accountSetupWebviewBinding.loginWebview.setVisibility(View.GONE);
 
-        final ProgressBar progressBar = findViewById(R.id.login_webview_progress_bar);
-
-        mLoginWebView.getSettings().setAllowFileAccess(false);
-        mLoginWebView.getSettings().setJavaScriptEnabled(true);
-        mLoginWebView.getSettings().setDomStorageEnabled(true);
+        accountSetupWebviewBinding.loginWebview.getSettings().setAllowFileAccess(false);
+        accountSetupWebviewBinding.loginWebview.getSettings().setJavaScriptEnabled(true);
+        accountSetupWebviewBinding.loginWebview.getSettings().setDomStorageEnabled(true);
 
         if (useGenericUserAgent) {
-            mLoginWebView.getSettings().setUserAgentString(MainApp.getUserAgent());
+            accountSetupWebviewBinding.loginWebview.getSettings().setUserAgentString(MainApp.getUserAgent());
         } else {
-            mLoginWebView.getSettings().setUserAgentString(getWebLoginUserAgent());
+            accountSetupWebviewBinding.loginWebview.getSettings().setUserAgentString(getWebLoginUserAgent());
         }
-        mLoginWebView.getSettings().setSaveFormData(false);
-        mLoginWebView.getSettings().setSavePassword(false);
+        accountSetupWebviewBinding.loginWebview.getSettings().setSaveFormData(false);
+        accountSetupWebviewBinding.loginWebview.getSettings().setSavePassword(false);
 
-        webViewFidoBridge = WebViewFidoBridge.createInstanceForWebView(this, mLoginWebView);
+        FidoDialogOptions.Builder dialogOptionsBuilder = FidoDialogOptions.builder();
+        dialogOptionsBuilder.setShowSdkLogo(true);
+        dialogOptionsBuilder.setTheme(R.style.FidoDialog);
+        webViewFidoU2fBridge = WebViewFidoBridge.createInstanceForWebView(
+            this, accountSetupWebviewBinding.loginWebview, dialogOptionsBuilder);
+
+        WebauthnDialogOptions.Builder webauthnOptionsBuilder = WebauthnDialogOptions.builder();
+        webauthnOptionsBuilder.setShowSdkLogo(true);
+        webauthnOptionsBuilder.setAllowSkipPin(true);
+        webauthnOptionsBuilder.setTheme(R.style.FidoDialog);
+        webViewWebauthnBridge = WebViewWebauthnBridge.createInstanceForWebView(
+            this, accountSetupWebviewBinding.loginWebview, webauthnOptionsBuilder);
 
         Map<String, String> headers = new HashMap<>();
         headers.put(RemoteOperation.OCS_API_HEADER, RemoteOperation.OCS_API_HEADER_VALUE);
@@ -397,79 +382,39 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             url = getResources().getString(R.string.webview_login_url);
         }
 
-        mLoginWebView.loadUrl(url, headers);
+        accountSetupWebviewBinding.loginWebview.loadUrl(url, headers);
 
-        setClient(progressBar);
-
-        // show snackbar after 60s to switch back to old login method
-        if (showLegacyLogin && getResources().getBoolean(R.bool.show_old_login)) {
-            final String finalBaseURL = baseURL;
-            new Handler().postDelayed(() -> DisplayUtils.createSnackbar(mLoginWebView,
-                                                                        R.string.fallback_weblogin_text,
-                                                                        Snackbar.LENGTH_INDEFINITE)
-                .setActionTextColor(getResources().getColor(R.color.themed_fg))
-                .setBackgroundTint(getResources().getColor(R.color.themed_bg))
-                .setTextColor(getResources().getColor(R.color.themed_fg))
-                .setAction(R.string.fallback_weblogin_back, v -> {
-                    mLoginWebView.setVisibility(View.INVISIBLE);
-                    webViewLoginMethod = false;
-
-                    setContentView(R.layout.account_setup);
-
-                    // initialize general UI elements
-                    initOverallUi();
-
-                    mPasswordInput.setVisibility(View.VISIBLE);
-                    mUsernameInput.setVisibility(View.VISIBLE);
-                    mUsernameInput.requestFocus();
-                    mAuthStatusView.setVisibility(View.INVISIBLE);
-                    mServerStatusView.setVisibility(View.INVISIBLE);
-                    mTestServerButton.setVisibility(View.INVISIBLE);
-                    forceOldLoginMethod = true;
-                    mOkButton.setVisibility(View.VISIBLE);
-
-                    initServerPreFragment(null);
-
-                    if (finalBaseURL != null) {
-                        mHostUrlInput.setText(finalBaseURL.replace(WEB_LOGIN, ""));
-                    } else {
-                        mHostUrlInput.setText(finalBaseURL);
-                    }
-
-                    checkOcServer();
-                }).show(), 60 * 1000);
-        }
+        setClient();
     }
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (mLoginWebView != null && event.getAction() == KeyEvent.ACTION_DOWN) {
-            switch (keyCode) {
-                case KeyEvent.KEYCODE_BACK:
-                    if (mLoginWebView.canGoBack()) {
-                        mLoginWebView.goBack();
-                    } else {
-                        finish();
-                    }
-                    return true;
+        if (accountSetupWebviewBinding != null && event.getAction() == KeyEvent.ACTION_DOWN &&
+            keyCode == KeyEvent.KEYCODE_BACK) {
+            if (accountSetupWebviewBinding.loginWebview.canGoBack()) {
+                accountSetupWebviewBinding.loginWebview.goBack();
+            } else {
+                finish();
             }
-
+            return true;
         }
         return super.onKeyDown(keyCode, event);
     }
 
-    private void setClient(ProgressBar progressBar) {
-        mLoginWebView.setWebViewClient(new WebViewClient() {
+    private void setClient() {
+        accountSetupWebviewBinding.loginWebview.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                webViewFidoBridge.delegateShouldInterceptRequest(view, request);
+                webViewFidoU2fBridge.delegateShouldInterceptRequest(view, request);
+                webViewWebauthnBridge.delegateShouldInterceptRequest(view, request);
                 return super.shouldInterceptRequest(view, request);
             }
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
-                webViewFidoBridge.delegateOnPageStarted(view, url, favicon);
+                webViewFidoU2fBridge.delegateOnPageStarted(view, url, favicon);
+                webViewWebauthnBridge.delegateOnPageStarted(view, url, favicon);
             }
 
             @Override
@@ -485,8 +430,11 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
 
-                progressBar.setVisibility(View.GONE);
-                mLoginWebView.setVisibility(View.VISIBLE);
+                accountSetupWebviewBinding.loginWebviewProgressBar.setVisibility(View.GONE);
+                accountSetupWebviewBinding.loginWebview.setVisibility(View.VISIBLE);
+
+                ThemeToolbarUtils.colorStatusBar(AuthenticatorActivity.this, primaryColor);
+                getWindow().setNavigationBarColor(primaryColor);
             }
 
             @Override
@@ -505,56 +453,36 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             }
 
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                progressBar.setVisibility(View.GONE);
-                mLoginWebView.setVisibility(View.VISIBLE);
+                accountSetupWebviewBinding.loginWebviewProgressBar.setVisibility(View.GONE);
+                accountSetupWebviewBinding.loginWebview.setVisibility(View.VISIBLE);
 
                 InputStream resources = getResources().openRawResource(R.raw.custom_error);
                 String customError = DisplayUtils.getData(resources);
 
                 if (!customError.isEmpty()) {
-                    mLoginWebView.loadData(customError, "text/html; charset=UTF-8", null);
+                    accountSetupWebviewBinding.loginWebview.loadData(customError, "text/html; charset=UTF-8", null);
                 }
             }
         });
     }
 
     private void parseAndLoginFromWebView(String dataString) {
-        String prefix = getString(R.string.login_data_own_scheme) + PROTOCOL_SUFFIX + "login/";
-        LoginUrlInfo loginUrlInfo = parseLoginDataUrl(prefix, dataString);
-
-        if (loginUrlInfo != null) {
-            try {
-                if (mHostUrlInput != null) {
-                    mHostUrlInput.setText("");
-                }
-                mServerInfo.mBaseUrl = AuthenticatorUrlUtils.normalizeUrlSuffix(loginUrlInfo.serverAddress);
-                webViewUser = loginUrlInfo.username;
-                webViewPassword = loginUrlInfo.password;
-            } catch (Exception e) {
-                mServerStatusIcon = R.drawable.ic_alert;
-                mServerStatusText = "QR Code could not be read!";
-                showServerStatus();
-            }
-            checkOcServer();
-        }
-    }
-
-    private void populateLoginFields(String dataString) throws IllegalArgumentException {
-        // check if it is cloud://login/
-        if (dataString.startsWith(getString(R.string.login_data_own_scheme) + PROTOCOL_SUFFIX + "login/")) {
+        try {
             String prefix = getString(R.string.login_data_own_scheme) + PROTOCOL_SUFFIX + "login/";
             LoginUrlInfo loginUrlInfo = parseLoginDataUrl(prefix, dataString);
 
-            if (loginUrlInfo != null) {
-                mHostUrlInput.setText(loginUrlInfo.serverAddress);
-                mUsernameInput.setText(loginUrlInfo.username);
-                mPasswordInput.setText(loginUrlInfo.password);
-
-                if (loginUrlInfo.serverAddress != null && !mServerIsChecked) {
-                    onUrlInputFocusLost();
-                }
+            if (accountSetupBinding != null) {
+                accountSetupBinding.hostUrlInput.setText("");
             }
+            mServerInfo.mBaseUrl = AuthenticatorUrlUtils.normalizeUrlSuffix(loginUrlInfo.serverAddress);
+            webViewUser = loginUrlInfo.username;
+            webViewPassword = loginUrlInfo.password;
+        } catch (Exception e) {
+            mServerStatusIcon = R.drawable.ic_alert;
+            mServerStatusText = getString(R.string.qr_could_not_be_read);
+            showServerStatus();
         }
+        checkOcServer();
     }
 
     /**
@@ -586,13 +514,13 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         for (String value : values) {
             if (value.startsWith("user" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR)) {
                 loginUrlInfo.username = URLDecoder.decode(
-                        value.substring(("user" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR).length()));
+                    value.substring(("user" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR).length()));
             } else if (value.startsWith("password" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR)) {
                 loginUrlInfo.password = URLDecoder.decode(
-                        value.substring(("password" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR).length()));
+                    value.substring(("password" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR).length()));
             } else if (value.startsWith("server" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR)) {
                 loginUrlInfo.serverAddress = URLDecoder.decode(
-                        value.substring(("server" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR).length()));
+                    value.substring(("server" + LOGIN_URL_DATA_KEY_VALUE_SEPARATOR).length()));
             }
         }
 
@@ -603,54 +531,25 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
      * Configures elements in the user interface under direct control of the Activity.
      */
     private void initOverallUi() {
-        mHostUrlInput = findViewById(R.id.hostUrlInput);
-        mPasswordInput = findViewById(R.id.account_password);
-        mUsernameInput = findViewById(R.id.account_username);
-        mAuthStatusView = findViewById(R.id.auth_status_text);
-        mServerStatusView = findViewById(R.id.server_status_text);
-        mTestServerButton = findViewById(R.id.testServerButton);
+        accountSetupBinding.hostUrlContainer.setEndIconOnClickListener(v -> checkOcServer());
 
-        mOkButton = findViewById(R.id.buttonOK);
-        mOkButton.setOnClickListener(v -> onOkClick());
+        accountSetupBinding.hostUrlInputHelperText.setText(
+            String.format(getString(R.string.login_url_helper_text), getString(R.string.app_name)));
 
-        scanQR = findViewById(R.id.scanQR);
         if (deviceInfo.hasCamera(this)) {
-            scanQR.setOnClickListener(v -> onScan());
+            accountSetupBinding.scanQr.setOnClickListener(v -> onScan());
+            ThemeDrawableUtils.tintDrawable(accountSetupBinding.scanQr.getDrawable(),
+                                            getResources().getColor(R.color.login_text_color));
         } else {
-            scanQR.setVisibility(View.GONE);
-        }
-
-        setupInstructionMessage();
-
-        mTestServerButton.setVisibility(mAction == ACTION_CREATE ? View.VISIBLE : View.GONE);
-    }
-
-
-    private void setupInstructionMessage() {
-        TextView instructionsView = findViewById(R.id.instructions_message);
-
-        if (mAction == ACTION_UPDATE_EXPIRED_TOKEN) {
-            instructionsView.setVisibility(View.VISIBLE);
-
-            String instructionsMessageText = getString(R.string.auth_expired_basic_auth_toast);
-            instructionsView.setText(instructionsMessageText);
-        } else {
-            instructionsView.setVisibility(View.GONE);
+            accountSetupBinding.scanQr.setVisibility(View.GONE);
         }
     }
-
-    public void onTestServerConnectionClick(View v) {
-        checkOcServer();
-    }
-
 
     /**
      * @param savedInstanceState Saved activity state, as in {{@link #onCreate(Bundle)}
      */
     private void initServerPreFragment(Bundle savedInstanceState) {
-
-        /// step 1 - load and process relevant inputs (resources, intent, savedInstanceState)
-        boolean isUrlInputAllowed = getResources().getBoolean(R.bool.show_server_url_input);
+        // step 1 - load and process relevant inputs (resources, intent, savedInstanceState)
         if (savedInstanceState == null) {
             if (mAccount != null) {
                 String baseUrl = mAccountMgr.getUserData(mAccount, Constants.KEY_OC_BASE_URL);
@@ -663,19 +562,12 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
                 mServerInfo.mIsSslConn = mServerInfo.mBaseUrl.startsWith(HTTPS_PROTOCOL);
                 mServerInfo.mVersion = accountManager.getServerVersion(mAccount);
             } else {
-                if (!webViewLoginMethod) {
-                    mServerInfo.mBaseUrl = getString(R.string.server_url).trim();
-                } else {
-                    mServerInfo.mBaseUrl = getString(R.string.webview_login_url).trim();
-                }
+                mServerInfo.mBaseUrl = getString(R.string.webview_login_url).trim();
                 mServerInfo.mIsSslConn = mServerInfo.mBaseUrl.startsWith(HTTPS_PROTOCOL);
             }
         } else {
             mServerStatusText = savedInstanceState.getString(KEY_SERVER_STATUS_TEXT);
             mServerStatusIcon = savedInstanceState.getInt(KEY_SERVER_STATUS_ICON);
-
-            mServerIsValid = savedInstanceState.getBoolean(KEY_SERVER_VALID);
-            mServerIsChecked = savedInstanceState.getBoolean(KEY_SERVER_CHECKED);
 
             // TODO parcelable
             mServerInfo.mIsSslConn = savedInstanceState.getBoolean(KEY_IS_SSL_CONN);
@@ -685,62 +577,8 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
                 mServerInfo.mVersion = new OwnCloudVersion(ocVersion);
             }
             mServerInfo.mAuthMethod = AuthenticationMethod.valueOf(
-                    savedInstanceState.getString(KEY_SERVER_AUTH_METHOD));
+                savedInstanceState.getString(KEY_SERVER_AUTH_METHOD));
 
-        }
-
-        if (!webViewLoginMethod) {
-            /// step 2 - set properties of UI elements (text, visibility, enabled...)
-            mHostUrlInput = findViewById(R.id.hostUrlInput);
-            // Convert IDN to Unicode
-            mHostUrlInput.setText(DisplayUtils.convertIdn(mServerInfo.mBaseUrl, false));
-            if (mAction != ACTION_CREATE) {
-                /// lock things that should not change
-                mHostUrlInput.setEnabled(false);
-                mHostUrlInput.setFocusable(false);
-            }
-            if (isUrlInputAllowed) {
-                mRefreshButton = findViewById(R.id.embeddedRefreshButton);
-            } else {
-                findViewById(R.id.hostUrlFrame).setVisibility(View.GONE);
-                mRefreshButton = findViewById(R.id.centeredRefreshButton);
-            }
-            showRefreshButton(mServerIsChecked && !mServerIsValid &&
-                    mWaitingForOpId > Integer.MAX_VALUE);
-            mServerStatusView = findViewById(R.id.server_status_text);
-            showServerStatus();
-
-            /// step 3 - bind some listeners and options
-            mHostUrlInput.setImeOptions(EditorInfo.IME_ACTION_NEXT);
-            mHostUrlInput.setOnEditorActionListener(this);
-
-            /// step 4 - create listeners that will be bound at onResume
-            mHostUrlInputWatcher = new TextWatcher() {
-
-                @Override
-                public void afterTextChanged(Editable s) {
-                    if (mOkButton.isEnabled() &&
-                            !mServerInfo.mBaseUrl.equals(
-                                    AuthenticatorUrlUtils.normalizeUrl(s.toString(), mServerInfo.mIsSslConn))) {
-                        mOkButton.setEnabled(false);
-                    }
-                }
-
-                @Override
-                public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-                    // not used at the moment
-                }
-
-                @Override
-                public void onTextChanged(CharSequence s, int start, int before, int count) {
-                    if (mAuthStatusIcon != 0) {
-                        Log_OC.d(TAG, "onTextChanged: hiding authentication status");
-                        mAuthStatusIcon = 0;
-                        mAuthStatusText = EMPTY_STRING;
-                        showAuthStatus();
-                    }
-                }
-            };
         }
     }
 
@@ -748,85 +586,31 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
      * @param savedInstanceState Saved activity state, as in {{@link #onCreate(Bundle)}
      */
     private void initAuthorizationPreFragment(Bundle savedInstanceState) {
-
-        /// step 0 - get UI elements in layout
-        mUsernameInput = findViewById(R.id.account_username);
-        mPasswordInput = findViewById(R.id.account_password);
-        mAuthStatusView = findViewById(R.id.auth_status_text);
-
         /// step 1 - load and process relevant inputs (resources, intent, savedInstanceState)
-        String presetUserName = null;
-        boolean isPasswordExposed = false;
-        if (savedInstanceState == null) {
-            if (mAccount != null) {
-                presetUserName = com.owncloud.android.lib.common.accounts.AccountUtils.getUsernameForAccount(mAccount);
-            }
-        } else {
-            isPasswordExposed = savedInstanceState.getBoolean(KEY_PASSWORD_EXPOSED, false);
+        if (savedInstanceState != null) {
             mAuthStatusText = savedInstanceState.getString(KEY_AUTH_STATUS_TEXT);
             mAuthStatusIcon = savedInstanceState.getInt(KEY_AUTH_STATUS_ICON);
-            mAuthToken = savedInstanceState.getString(KEY_AUTH_TOKEN);
         }
 
         /// step 2 - set properties of UI elements (text, visibility, enabled...)
-        if (presetUserName != null) {
-            mUsernameInput.setText(presetUserName);
-        }
-        if (mAction != ACTION_CREATE) {
-            mUsernameInput.setEnabled(false);
-            mUsernameInput.setFocusable(false);
-        }
-        mPasswordInput.setText(EMPTY_STRING); // clean password to avoid social hacking
-        if (isPasswordExposed) {
-            showPassword();
-        }
         showAuthStatus();
-        mOkButton.setEnabled(mServerIsValid);
 
-
-        /// step 3 - bind listeners
-        // bindings for password input field
-        mPasswordInput.setOnFocusChangeListener(this);
-        mPasswordInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
-        mPasswordInput.setOnEditorActionListener(this);
-        mPasswordInput.setOnTouchListener(new RightDrawableOnTouchListener() {
-            @Override
-            public boolean onDrawableTouch(final MotionEvent event) {
-                if (event.getAction() == MotionEvent.ACTION_UP) {
-                    AuthenticatorActivity.this.onViewPasswordClick();
-                }
-                return true;
-            }
-        });
-
+        accountSetupBinding.hostUrlInput.setImeOptions(EditorInfo.IME_ACTION_NEXT);
+        accountSetupBinding.hostUrlInput.setOnEditorActionListener(this);
     }
 
     /**
      * Saves relevant state before {@link #onPause()}
-     *
+     * <p>
      * See {@link super#onSaveInstanceState(Bundle)}
      */
     @Override
-    protected void onSaveInstanceState(Bundle outState) {
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
         //Log_OC.e(TAG, "onSaveInstanceState init" );
         super.onSaveInstanceState(outState);
 
         /// global state
         outState.putLong(KEY_WAITING_FOR_OP_ID, mWaitingForOpId);
-
-        if (!webViewLoginMethod) {
-            /// Server PRE-fragment state
-            outState.putString(KEY_SERVER_STATUS_TEXT, mServerStatusText);
-            outState.putInt(KEY_SERVER_STATUS_ICON, mServerStatusIcon);
-            outState.putBoolean(KEY_SERVER_CHECKED, mServerIsChecked);
-            outState.putBoolean(KEY_SERVER_VALID, mServerIsValid);
-
-            /// Authentication PRE-fragment state
-            outState.putBoolean(KEY_PASSWORD_EXPOSED, isPasswordVisible());
-            outState.putInt(KEY_AUTH_STATUS_ICON, mAuthStatusIcon);
-            outState.putString(KEY_AUTH_STATUS_TEXT, mAuthStatusText);
-            outState.putString(KEY_AUTH_TOKEN, mAuthToken);
-        }
 
         outState.putBoolean(KEY_IS_SSL_CONN, mServerInfo.mIsSslConn);
         outState.putString(KEY_HOST_URL_TEXT, mServerInfo.mBaseUrl);
@@ -839,11 +623,6 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         outState.putBoolean(KEY_AUTH_IS_FIRST_ATTEMPT_TAG, mIsFirstAuthAttempt);
 
         /// AsyncTask (User and password)
-        if (!webViewLoginMethod) {
-            outState.putString(KEY_USERNAME, mUsernameInput.getText().toString().trim());
-            outState.putString(KEY_PASSWORD, mPasswordInput.getText().toString());
-        }
-
         if (mAsyncTask != null) {
             mAsyncTask.cancel(true);
             outState.putBoolean(KEY_ASYNC_TASK_IN_PROGRESS, true);
@@ -851,15 +630,11 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             outState.putBoolean(KEY_ASYNC_TASK_IN_PROGRESS, false);
         }
         mAsyncTask = null;
-
-        //Log_OC.e(TAG, "onSaveInstanceState end" );
     }
 
     @Override
-    public void onRestoreInstanceState(Bundle savedInstanceState) {
+    public void onRestoreInstanceState(@NonNull Bundle savedInstanceState) {
         super.onRestoreInstanceState(savedInstanceState);
-
-        mServerIsChecked = savedInstanceState.getBoolean(KEY_SERVER_CHECKED, false);
 
         // AsyncTask
         boolean inProgress = savedInstanceState.getBoolean(KEY_ASYNC_TASK_IN_PROGRESS);
@@ -873,11 +648,11 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
     }
 
     /**
-     * The redirection triggered by the OAuth authentication server as response to the
-     * GET AUTHORIZATION request is caught here.
-     *
-     * To make this possible, this activity needs to be qualified with android:launchMode =
-     * "singleTask" in the AndroidManifest.xml file.
+     * The redirection triggered by the OAuth authentication server as response to the GET AUTHORIZATION request is
+     * caught here.
+     * <p>
+     * To make this possible, this activity needs to be qualified with android:launchMode = "singleTask" in the
+     * AndroidManifest.xml file.
      */
     @Override
     protected void onNewIntent(Intent intent) {
@@ -887,6 +662,8 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         if (intent.getBooleanExtra(FirstRunActivity.EXTRA_EXIT, false)) {
             super.finish();
         }
+
+        onlyAdd = intent.getBooleanExtra(KEY_ONLY_ADD, false) || checkIfViaSSO(intent);
 
         // Passcode
         PassCodeManager passCodeManager = new PassCodeManager(preferences);
@@ -906,51 +683,37 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         }
 
         if (intent.getBooleanExtra(EXTRA_USE_PROVIDER_AS_WEBLOGIN, false)) {
-            webViewLoginMethod = true;
-            setContentView(R.layout.account_setup_webview);
-            mLoginWebView = findViewById(R.id.login_webview);
-            initWebViewLogin(getString(R.string.provider_registration_server), false, true);
+            accountSetupWebviewBinding = AccountSetupWebviewBinding.inflate(getLayoutInflater());
+            setContentView(accountSetupWebviewBinding.getRoot());
+            initWebViewLogin(getString(R.string.provider_registration_server), true);
+        }
+    }
+
+    private boolean checkIfViaSSO(Intent intent) {
+        Bundle extras = intent.getExtras();
+        if (extras == null) {
+            return false;
+        } else {
+            String authTokenType = extras.getString("authTokenType");
+            return "SSO".equals(authTokenType);
         }
     }
 
 
     /**
-     * The redirection triggered by the OAuth authentication server as response to the
-     * GET AUTHORIZATION, and deferred in {@link #onNewIntent(Intent)}, is processed here.
+     * The redirection triggered by the OAuth authentication server as response to the GET AUTHORIZATION, and deferred
+     * in {@link #onNewIntent(Intent)}, is processed here.
      */
     @Override
     protected void onResume() {
         super.onResume();
 
-        if (!webViewLoginMethod) {
-            // bound here to avoid spurious changes triggered by Android on device rotations
-            mHostUrlInput.setOnFocusChangeListener(this);
-            mHostUrlInput.addTextChangedListener(mHostUrlInputWatcher);
-
-            String dataString = getIntent().getDataString();
-            if (dataString != null) {
-                try {
-                    if (!getResources().getBoolean(R.bool.multiaccount_support) &&
-                        accountManager.getAccounts().length == 1) {
-                        Toast.makeText(this, R.string.no_mutliple_accounts_allowed, Toast.LENGTH_LONG).show();
-                        finish();
-                        return;
-                    } else {
-                        populateLoginFields(dataString);
-                    }
-                } catch (IllegalArgumentException e) {
-                    DisplayUtils.showSnackMessage(findViewById(R.id.scroll), R.string.auth_illegal_login_used);
-                    Log_OC.e(TAG, "Illegal login data URL used, no Login pre-fill!", e);
-                }
-            }
-        }
-
         // bind to Operations Service
         mOperationsServiceConnection = new OperationsServiceConnection();
         if (!bindService(new Intent(this, OperationsService.class),
-                mOperationsServiceConnection,
-                Context.BIND_AUTO_CREATE)) {
-            DisplayUtils.showSnackMessage(findViewById(R.id.scroll), R.string.error_cant_bind_to_operations_service);
+                         mOperationsServiceConnection,
+                         Context.BIND_AUTO_CREATE)) {
+            DisplayUtils.showSnackMessage(accountSetupBinding.scroll, R.string.error_cant_bind_to_operations_service);
             finish();
         }
 
@@ -966,87 +729,37 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             mOperationsServiceBinder.removeOperationListener(this);
         }
 
-        if (!webViewLoginMethod) {
-            mHostUrlInput.removeTextChangedListener(mHostUrlInputWatcher);
-            mHostUrlInput.setOnFocusChangeListener(null);
-        }
-
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-
-        mHostUrlInputWatcher = null;
-
         if (mOperationsServiceConnection != null) {
             unbindService(mOperationsServiceConnection);
             mOperationsServiceBinder = null;
         }
 
-        if (webViewLoginMethod) {
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
-        }
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
 
         super.onDestroy();
-    }
-
-    /**
-     * Handles the change of focus on the text inputs for the server URL and the password
-     */
-    public void onFocusChange(View view, boolean hasFocus) {
-        if (view.getId() == R.id.hostUrlInput) {
-            if (!hasFocus) {
-                onUrlInputFocusLost();
-            } else {
-                showRefreshButton(false);
-            }
-
-        } else if (view.getId() == R.id.account_password) {
-            onPasswordFocusChanged(hasFocus);
-        }
-    }
-
-
-    /**
-     * Handles changes in focus on the text input for the server URL.
-     *
-     * IMPORTANT ENTRY POINT 2: When (!hasFocus), user wrote the server URL and changed to
-     * other field. The operation to check the existence of the server in the entered URL is
-     * started.
-     *
-     * When hasFocus:    user 'comes back' to write again the server URL.
-     */
-    private void onUrlInputFocusLost() {
-        if (!mServerInfo.mBaseUrl.equals(
-                AuthenticatorUrlUtils.normalizeUrl(mHostUrlInput.getText().toString(), mServerInfo.mIsSslConn))) {
-            // check server again only if the user changed something in the field
-            checkOcServer();
-        } else {
-            mOkButton.setEnabled(mServerIsValid);
-            showRefreshButton(!mServerIsValid);
-        }
     }
 
 
     private void checkOcServer() {
         String uri;
-        if (mHostUrlInput != null && !mHostUrlInput.getText().toString().isEmpty()) {
-            uri = mHostUrlInput.getText().toString().trim();
-            mOkButton.setEnabled(false);
-            showRefreshButton(false);
+        if (accountSetupBinding != null && accountSetupBinding.hostUrlInput.getText()!= null &&
+            !accountSetupBinding.hostUrlInput.getText().toString().isEmpty()) {
+            uri = accountSetupBinding.hostUrlInput.getText().toString().trim();
         } else {
             uri = mServerInfo.mBaseUrl;
         }
 
-        mServerIsValid = false;
-        mServerIsChecked = false;
         mServerInfo = new GetServerInfoOperation.ServerInfo();
 
         if (uri.length() != 0) {
-            if (mHostUrlInput != null) {
+            if (accountSetupBinding != null) {
                 uri = AuthenticatorUrlUtils.stripIndexPhpOrAppsFiles(uri);
-                mHostUrlInput.setText(uri);
+                accountSetupBinding.hostUrlInput.setText(uri);
             }
 
             // Handle internationalized domain names
@@ -1057,16 +770,17 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
                 Log_OC.e(TAG, "Error converting internationalized domain name " + uri, ex);
             }
 
-            if (mHostUrlInput != null) {
+            if (accountSetupBinding != null) {
                 mServerStatusText = getResources().getString(R.string.auth_testing_connection);
                 mServerStatusIcon = R.drawable.progress_small;
                 showServerStatus();
             }
 
+            // TODO maybe do this via async task
             Intent getServerInfoIntent = new Intent();
             getServerInfoIntent.setAction(OperationsService.ACTION_GET_SERVER_INFO);
             getServerInfoIntent.putExtra(OperationsService.EXTRA_SERVER_URL,
-                    AuthenticatorUrlUtils.normalizeUrlSuffix(uri));
+                                         AuthenticatorUrlUtils.normalizeUrlSuffix(uri));
 
             if (mOperationsServiceBinder != null) {
                 mWaitingForOpId = mOperationsServiceBinder.queueNewOperation(getServerInfoIntent);
@@ -1074,122 +788,24 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
                 Log_OC.e(TAG, "Server check tried with OperationService unbound!");
             }
 
-        } else {
-            mServerStatusText = EMPTY_STRING;
-            mServerStatusIcon = 0;
-            if (!webViewLoginMethod) {
-                showServerStatus();
-            }
         }
-    }
-
-
-    /**
-     * Handles changes in focus on the text input for the password (basic authorization).
-     *
-     * When (hasFocus), the button to toggle password visibility is shown.
-     *
-     * When (!hasFocus), the button is made invisible and the password is hidden.
-     *
-     * @param hasFocus 'True' if focus is received, 'false' if is lost
-     */
-    private void onPasswordFocusChanged(boolean hasFocus) {
-        if (hasFocus) {
-            showViewPasswordButton();
-        } else {
-            hidePassword();
-            hidePasswordButton();
-        }
-    }
-
-    private void showViewPasswordButton() {
-        int drawable = R.drawable.ic_view;
-        if (isPasswordVisible()) {
-            drawable = R.drawable.ic_hide;
-        }
-        mPasswordInput.setCompoundDrawablesWithIntrinsicBounds(0, 0, drawable, 0);
-    }
-
-    private boolean isPasswordVisible() {
-        return ((mPasswordInput.getInputType() & InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) ==
-                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-    }
-
-    private void hidePasswordButton() {
-        mPasswordInput.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0);
-    }
-
-    private void showPassword() {
-        mPasswordInput.setInputType(
-                InputType.TYPE_CLASS_TEXT |
-                        InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD |
-                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        );
-        showViewPasswordButton();
-    }
-
-    private void hidePassword() {
-        mPasswordInput.setInputType(
-                InputType.TYPE_CLASS_TEXT |
-                        InputType.TYPE_TEXT_VARIATION_PASSWORD |
-                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        );
-        showViewPasswordButton();
     }
 
     /**
-     * Checks the credentials of the user in the root of the ownCloud server
-     * before creating a new local account.
-     *
-     * For basic authorization, a check of existence of the root folder is
-     * performed.
-     *
-     * For OAuth, starts the flow to get an access token; the credentials test
-     * is postponed until it is available.
-     *
-     * IMPORTANT ENTRY POINT 4
-     */
-    public void onOkClick() {
-        // this check should be unnecessary
-        if (mServerInfo.mVersion == null ||
-            !mServerInfo.mVersion.isVersionValid() ||
-            TextUtils.isEmpty(mServerInfo.mBaseUrl)) {
-            mServerStatusIcon = R.drawable.ic_alert;
-            mServerStatusText = getResources().getString(R.string.auth_wtf_reenter_URL);
-            showServerStatus();
-            mOkButton.setEnabled(false);
-            return;
-        }
-
-        checkBasicAuthorization(null, null);
-    }
-
-
-    /**
-     * Tests the credentials entered by the user performing a check of existence on
-     * the root folder of the ownCloud server.
+     * Tests the credentials entered by the user performing a check of existence on the root folder of the ownCloud
+     * server.
      */
     private void checkBasicAuthorization(@Nullable String webViewUsername, @Nullable String webViewPassword) {
-        /// get basic credentials entered by user
-        String username;
-        String password;
-        if (!webViewLoginMethod) {
-            username = mUsernameInput.getText().toString().trim();
-            password = mPasswordInput.getText().toString();
-        } else {
-            username = webViewUsername;
-            password = webViewPassword;
-        }
-
-        /// be gentle with the user
+        // be gentle with the user
         IndeterminateProgressDialog dialog = IndeterminateProgressDialog.newInstance(R.string.auth_trying_to_login,
                                                                                      true);
         FragmentTransaction ft = getSupportFragmentManager().beginTransaction();
         ft.add(dialog, WAIT_DIALOG_TAG);
         ft.commitAllowingStateLoss();
 
-        /// validate credentials accessing the root folder
-        OwnCloudCredentials credentials = OwnCloudCredentialsFactory.newBasicCredentials(username, password);
+        // validate credentials accessing the root folder
+        OwnCloudCredentials credentials = OwnCloudCredentialsFactory.newBasicCredentials(webViewUsername,
+                                                                                         webViewPassword);
         accessRootFolder(credentials);
     }
 
@@ -1201,7 +817,7 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
 
     /**
      * Callback method invoked when a RemoteOperation executed by this Activity finishes.
-     *
+     * <p>
      * Dispatches the operation flow to the right method.
      */
     @Override
@@ -1217,41 +833,22 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         }
     }
 
-    private void onGetUserNameFinish(RemoteOperationResult result) {
+    private void onGetUserNameFinish(RemoteOperationResult<UserInfo> result) {
         mWaitingForOpId = Long.MAX_VALUE;
         if (result.isSuccess()) {
             boolean success = false;
-            String username;
-            if (result.getData().get(0) instanceof UserInfo) {
-                username = ((UserInfo) result.getData().get(0)).getDisplayName();
-            } else {
-                username = (String) result.getData().get(0);
-            }
 
             if (mAction == ACTION_CREATE) {
-                if (!webViewLoginMethod) {
-                    mUsernameInput.setText(username);
-                }
                 success = createAccount(result);
             } else {
+                try {
+                    updateAccountAuthentication();
+                    success = true;
 
-                if (!webViewLoginMethod && !mUsernameInput.getText().toString().trim().equals(username)) {
-                    // fail - not a new account, but an existing one; disallow
-                    result = new RemoteOperationResult(ResultCode.ACCOUNT_NOT_THE_SAME);
-                    mAuthToken = EMPTY_STRING;
-                    updateAuthStatusIconAndText(result);
-                    showAuthStatus();
-                    Log_OC.d(TAG, result.getLogMessage());
-                } else {
-                    try {
-                        updateAccountAuthentication();
-                        success = true;
-
-                    } catch (AccountNotFoundException e) {
-                        Log_OC.e(TAG, "Account " + mAccount + " was removed!", e);
-                        DisplayUtils.showSnackMessage(findViewById(R.id.scroll), R.string.auth_account_does_not_exist);
-                        finish();
-                    }
+                } catch (AccountNotFoundException e) {
+                    Log_OC.e(TAG, "Account " + mAccount + " was removed!", e);
+                    DisplayUtils.showSnackMessage(accountSetupBinding.scroll, R.string.auth_account_does_not_exist);
+                    finish();
                 }
             }
 
@@ -1259,31 +856,22 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
                 finish();
             }
         } else {
-            if (!webViewLoginMethod) {
-                int statusText = result.getCode() == ResultCode.MAINTENANCE_MODE ? R.string.maintenance_mode : R.string.auth_fail_get_user_name;
-                updateStatusIconFailUserName(statusText);
-                showAuthStatus();
-            }
+            // TODO check
+            int statusText = result.getCode() == ResultCode.MAINTENANCE_MODE ? R.string.maintenance_mode : R.string.auth_fail_get_user_name;
+            updateStatusIconFailUserName(statusText);
+            showAuthStatus();
             Log_OC.e(TAG, "Access to user name failed: " + result.getLogMessage());
         }
-
     }
 
     /**
-     * Processes the result of the server check performed when the user finishes the enter of the
-     * server URL.
+     * Processes the result of the server check performed when the user finishes the enter of the server URL.
      *
      * @param result Result of the check.
      */
     private void onGetServerInfoFinish(RemoteOperationResult result) {
         /// update activity state
-        mServerIsChecked = true;
         mWaitingForOpId = Long.MAX_VALUE;
-
-        // update server status, but don't show it yet
-        if (!webViewLoginMethod) {
-            updateServerStatusIconAndText(result);
-        }
 
         if (result.isSuccess()) {
             /// SUCCESS means:
@@ -1300,71 +888,41 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
                 DisplayUtils.showServerOutdatedSnackbar(this, Snackbar.LENGTH_INDEFINITE);
             }
 
-            webViewLoginMethod = mServerInfo.mVersion.isWebLoginSupported() && !forceOldLoginMethod;
-
             if (webViewUser != null && !webViewUser.isEmpty() &&
-                    webViewPassword != null && !webViewPassword.isEmpty()) {
+                webViewPassword != null && !webViewPassword.isEmpty()) {
                 checkBasicAuthorization(webViewUser, webViewPassword);
-            } else if (webViewLoginMethod) {
-                // hide old login
-                setOldLoginVisibility(View.GONE);
-
-                setContentView(R.layout.account_setup_webview);
-                mLoginWebView = findViewById(R.id.login_webview);
-                initWebViewLogin(mServerInfo.mBaseUrl + WEB_LOGIN, true, false);
             } else {
-                // show old login
-                setOldLoginVisibility(View.VISIBLE);
+                new Thread(() -> {
+                    OwnCloudClient client = OwnCloudClientFactory.createOwnCloudClient(Uri.parse(mServerInfo.mBaseUrl),
+                                                                                       this,
+                                                                                       true);
+                    RemoteOperationResult remoteOperationResult = new GetCapabilitiesRemoteOperation().execute(client);
+
+                    if (remoteOperationResult.isSuccess() &&
+                        remoteOperationResult.getData() != null &&
+                        remoteOperationResult.getData().size() > 0) {
+                        OCCapability capability = (OCCapability) remoteOperationResult.getData().get(0);
+                        try {
+                            primaryColor = Color.parseColor(capability.getServerColor());
+                        } catch (Exception e) {
+                            // falls back to primary color
+                        }
+                    }
+                }).start();
+
+                accountSetupWebviewBinding = AccountSetupWebviewBinding.inflate(getLayoutInflater());
+                setContentView(accountSetupWebviewBinding.getRoot());
+                initWebViewLogin(mServerInfo.mBaseUrl + WEB_LOGIN, false);
             }
-
-            if (!authSupported(mServerInfo.mAuthMethod)) {
-
-                if (!webViewLoginMethod) {
-                    // overrides updateServerStatusIconAndText()
-                    updateServerStatusIconNoRegularAuth();
-                }
-                mServerIsValid = false;
-
-            } else {
-                mServerIsValid = true;
-            }
-
         } else {
-            mServerIsValid = false;
-        }
-
-        // refresh UI
-        if (!webViewLoginMethod) {
-            showRefreshButton(!mServerIsValid);
+            updateServerStatusIconAndText(result);
             showServerStatus();
-            mOkButton.setEnabled(mServerIsValid);
         }
 
-        if (!mServerIsValid) {
-            // hide old login
-            setOldLoginVisibility(View.GONE);
-        }
-
-        /// very special case (TODO: move to a common place for all the remote operations)
+        // very special case (TODO: move to a common place for all the remote operations)
         if (result.getCode() == ResultCode.SSL_RECOVERABLE_PEER_UNVERIFIED) {
             showUntrustedCertDialog(result);
         }
-    }
-
-    private void setOldLoginVisibility(int visible) {
-        mOkButton.setVisibility(visible);
-        mUsernameInput.setVisibility(visible);
-        mPasswordInput.setVisibility(visible);
-
-        if (View.VISIBLE == visible) {
-            scanQR.setVisibility(View.GONE);
-        } else {
-            scanQR.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private boolean authSupported(AuthenticationMethod authMethod) {
-        return AuthenticationMethod.BASIC_HTTP_AUTH.equals(authMethod);
     }
 
     /**
@@ -1383,7 +941,13 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
 
             case OK_NO_SSL:
             case OK:
-                if (mHostUrlInput.getText().toString().trim().toLowerCase(Locale.ROOT).startsWith(HTTP_PROTOCOL)) {
+                if (accountSetupBinding.hostUrlInput.getText() != null &&
+                    accountSetupBinding.hostUrlInput
+                    .getText()
+                    .toString()
+                    .trim()
+                    .toLowerCase(Locale.ROOT)
+                    .startsWith(HTTP_PROTOCOL)) {
                     mServerStatusText = getResources().getString(R.string.auth_connection_established);
                     mServerStatusIcon = R.drawable.ic_ok;
                 } else {
@@ -1438,10 +1002,10 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
                 break;
             case UNKNOWN_ERROR:
                 if (result.getException() != null &&
-                        !TextUtils.isEmpty(result.getException().getMessage())) {
+                    !TextUtils.isEmpty(result.getException().getMessage())) {
                     mServerStatusText = getResources().getString(
-                            R.string.auth_unknown_error_exception_title,
-                            result.getException().getMessage()
+                        R.string.auth_unknown_error_exception_title,
+                        result.getException().getMessage()
                     );
                 } else {
                     mServerStatusText = getResources().getString(R.string.auth_unknown_error_title);
@@ -1464,7 +1028,6 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         }
     }
 
-
     /**
      * Chooses the right icon and text to show to the user for the received operation result.
      *
@@ -1481,12 +1044,20 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
 
             case OK_NO_SSL:
             case OK:
-                if (mHostUrlInput.getText().toString().trim().toLowerCase(Locale.ROOT).startsWith(HTTP_PROTOCOL)) {
-                    mAuthStatusText = getResources().getString(R.string.auth_connection_established);
-                    mAuthStatusIcon = R.drawable.ic_ok;
-                } else {
-                    mAuthStatusText = getResources().getString(R.string.auth_nossl_plain_ok_title);
-                    mAuthStatusIcon = R.drawable.ic_lock_open_white;
+                if (showWebViewLoginUrl) {
+                    if (accountSetupBinding.hostUrlInput.getText() != null &&
+                        accountSetupBinding.hostUrlInput
+                        .getText()
+                        .toString()
+                        .trim()
+                        .toLowerCase(Locale.ROOT)
+                        .startsWith(HTTP_PROTOCOL)) {
+                        mAuthStatusText = getResources().getString(R.string.auth_connection_established);
+                        mAuthStatusIcon = R.drawable.ic_ok;
+                    } else {
+                        mAuthStatusText = getResources().getString(R.string.auth_nossl_plain_ok_title);
+                        mAuthStatusIcon = R.drawable.ic_lock_open_white;
+                    }
                 }
                 break;
 
@@ -1504,9 +1075,18 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             case HOST_NOT_AVAILABLE:
                 mAuthStatusText = getResources().getString(R.string.auth_unknown_host_title);
                 break;
+            case ACCOUNT_NOT_NEW:
+                mAuthStatusText = getString(R.string.auth_account_not_new);
+                if (!showWebViewLoginUrl) {
+                    DisplayUtils.showErrorAndFinishActivity(this, mAuthStatusText);
+                }
+                break;
             case UNHANDLED_HTTP_CODE:
             default:
                 mAuthStatusText = ErrorMessageAdapter.getErrorCauseMessage(result, null, getResources());
+                if (!showWebViewLoginUrl) {
+                    DisplayUtils.showErrorAndFinishActivity(this, mAuthStatusText);
+                }
         }
     }
 
@@ -1515,22 +1095,17 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         mAuthStatusText = getResources().getString(failedStatusText);
     }
 
-    private void updateServerStatusIconNoRegularAuth() {
-        mServerStatusIcon = R.drawable.ic_alert;
-        mServerStatusText = getResources().getString(R.string.auth_can_not_auth_against_server);
-    }
-
     /**
      * Processes the result of the access check performed to try the user credentials.
-     *
+     * <p>
      * Creates a new account through the AccountManager.
      *
      * @param result Result of the operation.
      */
     @Override
-    public void onAuthenticatorTaskCallback(RemoteOperationResult result) {
+    public void onAuthenticatorTaskCallback(RemoteOperationResult<UserInfo> result) {
         mWaitingForOpId = Long.MAX_VALUE;
-        dismissDialog(WAIT_DIALOG_TAG);
+        dismissWaitingDialog();
         mAsyncTask = null;
 
         if (result.isSuccess()) {
@@ -1540,7 +1115,6 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
 
             if (mAction == ACTION_CREATE) {
                 success = createAccount(result);
-
             } else {
                 try {
                     updateAccountAuthentication();
@@ -1548,7 +1122,7 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
 
                 } catch (AccountNotFoundException e) {
                     Log_OC.e(TAG, "Account " + mAccount + " was removed!", e);
-                    DisplayUtils.showSnackMessage(findViewById(R.id.scroll), R.string.auth_account_does_not_exist);
+                    DisplayUtils.showSnackMessage(accountSetupBinding.scroll, R.string.auth_account_does_not_exist);
                     finish();
                 }
             }
@@ -1556,42 +1130,34 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             // Reset webView
             webViewPassword = null;
             webViewUser = null;
-            forceOldLoginMethod = false;
             deleteCookies();
 
             if (success) {
-                finish();
-
                 accountManager.setCurrentOwnCloudAccount(mAccount.name);
-
-                Intent i = new Intent(this, FileDisplayActivity.class);
-                i.setAction(FileDisplayActivity.RESTART);
-                i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                startActivity(i);
-
+                if (onlyAdd) {
+                    finish();
+                } else {
+                    Intent i = new Intent(this, FileDisplayActivity.class);
+                    i.setAction(FileDisplayActivity.RESTART);
+                    i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    startActivity(i);
+                }
             } else {
                 // init webView again
-                if (mLoginWebView != null) {
-                    mLoginWebView.setVisibility(View.GONE);
+                if (accountSetupWebviewBinding != null) {
+                    accountSetupWebviewBinding.loginWebview.setVisibility(View.GONE);
                 }
-                setContentView(R.layout.account_setup);
-
+                accountSetupBinding = AccountSetupBinding.inflate(getLayoutInflater());
+                setContentView(accountSetupBinding.getRoot());
                 initOverallUi();
 
-                EditText serverAddressField = findViewById(R.id.hostUrlInput);
-                serverAddressField.setText(mServerInfo.mBaseUrl);
-
-                findViewById(R.id.server_status_text).setVisibility(View.GONE);
-                mAuthStatusView = findViewById(R.id.auth_status_text);
-
+                accountSetupBinding.hostUrlInput.setText(mServerInfo.mBaseUrl);
+                accountSetupBinding.serverStatusText.setVisibility(View.GONE);
                 showAuthStatus();
             }
 
         } else if (result.isServerFail() || result.isException()) {
-            /// server errors or exceptions in authorization take to requiring a new check of
-            /// the server
-            mServerIsChecked = true;
-            mServerIsValid = false;
+            /// server errors or exceptions in authorization take to requiring a new check of the server
             mServerInfo = new GetServerInfoOperation.ServerInfo();
 
             // update status icon and text
@@ -1599,13 +1165,6 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             showServerStatus();
             mAuthStatusIcon = 0;
             mAuthStatusText = EMPTY_STRING;
-            if (!webViewLoginMethod) {
-                showAuthStatus();
-
-                // update input controls state
-                showRefreshButton(true);
-                mOkButton.setEnabled(false);
-            }
 
             // very special case (TODO: move to a common place for all the remote operations)
             if (result.getCode() == ResultCode.SSL_RECOVERABLE_PEER_UNVERIFIED) {
@@ -1613,36 +1172,18 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             }
 
         } else {    // authorization fail due to client side - probably wrong credentials
-            if (webViewLoginMethod) {
-                mLoginWebView = findViewById(R.id.login_webview);
-
-                if (mLoginWebView != null) {
-                    initWebViewLogin(mServerInfo.mBaseUrl + WEB_LOGIN, true, false);
-                    DisplayUtils.showSnackMessage(this, mLoginWebView, R.string.auth_access_failed,
-                                                  result.getLogMessage());
-                } else {
-                    DisplayUtils.showSnackMessage(this, R.string.auth_access_failed, result.getLogMessage());
-
-                    // init webView again
-                    if (mLoginWebView != null) {
-                        mLoginWebView.setVisibility(View.GONE);
-                    }
-                    setContentView(R.layout.account_setup);
-
-                    initOverallUi();
-
-                    EditText serverAddressField = findViewById(R.id.hostUrlInput);
-                    serverAddressField.setText(mServerInfo.mBaseUrl);
-
-                    findViewById(R.id.server_status_text).setVisibility(View.GONE);
-                    mAuthStatusView = findViewById(R.id.auth_status_text);
-
-                    showAuthStatus();
-                }
+            if (accountSetupWebviewBinding != null) {
+                initWebViewLogin(mServerInfo.mBaseUrl + WEB_LOGIN, false);
+                DisplayUtils.showSnackMessage(this,
+                                              accountSetupWebviewBinding.loginWebview, R.string.auth_access_failed,
+                                              result.getLogMessage());
             } else {
+                DisplayUtils.showSnackMessage(this, R.string.auth_access_failed, result.getLogMessage());
+
+                // init webView again
                 updateAuthStatusIconAndText(result);
-                showAuthStatus();
             }
+
             // reset webview
             webViewPassword = null;
             webViewUser = null;
@@ -1654,47 +1195,40 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
 
     /**
      * Updates the authentication token.
-     *
-     * Sets the proper response so that the AccountAuthenticator that started this activity
-     * saves a new authorization token for mAccount.
-     *
-     * Kills the session kept by OwnCloudClientManager so that a new one will created with
-     * the new credentials when needed.
+     * <p>
+     * Sets the proper response so that the AccountAuthenticator that started this activity saves a new authorization
+     * token for mAccount.
+     * <p>
+     * Kills the session kept by OwnCloudClientManager so that a new one will created with the new credentials when
+     * needed.
      */
     private void updateAccountAuthentication() throws AccountNotFoundException {
         Bundle response = new Bundle();
         response.putString(AccountManager.KEY_ACCOUNT_NAME, mAccount.name);
         response.putString(AccountManager.KEY_ACCOUNT_TYPE, mAccount.type);
-
-        if (webViewLoginMethod) {
-            response.putString(AccountManager.KEY_AUTHTOKEN, webViewPassword);
-            mAccountMgr.setPassword(mAccount, webViewPassword);
-        } else {
-            response.putString(AccountManager.KEY_AUTHTOKEN, mPasswordInput.getText().toString());
-            mAccountMgr.setPassword(mAccount, mPasswordInput.getText().toString());
-        }
+        response.putString(AccountManager.KEY_AUTHTOKEN, webViewPassword);
+        mAccountMgr.setPassword(mAccount, webViewPassword);
 
         // remove managed clients for this account to enforce creation with fresh credentials
         OwnCloudAccount ocAccount = new OwnCloudAccount(mAccount, this);
         OwnCloudClientManagerFactory.getDefaultSingleton().removeClientFor(ocAccount);
 
         setAccountAuthenticatorResult(response);
-        final Intent intent = new Intent();
+        Intent intent = new Intent();
         intent.putExtras(response);
         setResult(RESULT_OK, intent);
-
     }
 
     /**
      * Creates a new account through the Account Authenticator that started this activity.
-     *
+     * <p>
      * This makes the account permanent.
-     *
+     * <p>
      * TODO Decide how to name the OAuth accounts
      */
     @SuppressFBWarnings("DMI")
     @SuppressLint("TrulyRandom")
-    protected boolean createAccount(RemoteOperationResult authResult) {
+    protected boolean createAccount(RemoteOperationResult<UserInfo> authResult) {
         String accountType = MainApp.getAccountType(this);
 
         // create and save new ownCloud account
@@ -1706,12 +1240,7 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         Uri uri = Uri.parse(mServerInfo.mBaseUrl);
         // used for authenticate on every login/network connection, determined by first login (weblogin/old login)
         // can be anything: email, name, name with whitespaces
-        String loginName;
-        if (!webViewLoginMethod) {
-            loginName = mUsernameInput.getText().toString().trim();
-        } else {
-            loginName = webViewUser;
-        }
+        String loginName = webViewUser;
 
         String accountName = com.owncloud.android.lib.common.accounts.AccountUtils.buildAccountName(uri, loginName);
         Account newAccount = new Account(accountName, accountType);
@@ -1727,16 +1256,11 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
 
         } else {
             mAccount = newAccount;
+            mAccountMgr.addAccountExplicitly(mAccount, webViewPassword, null);
 
-            if (webViewLoginMethod) {
-                mAccountMgr.addAccountExplicitly(mAccount, webViewPassword, null);
-            } else {
-                mAccountMgr.addAccountExplicitly(mAccount, mPasswordInput.getText().toString(), null);
-            }
-
-            /// add the new account as default in preferences, if there is none already
-            Account defaultAccount = accountManager.getCurrentAccount();
-            if (defaultAccount == null) {
+            // add the new account as default in preferences, if there is none already
+            User defaultAccount = accountManager.getUser();
+            if (defaultAccount.isAnonymous()) {
                 SharedPreferences.Editor editor = PreferenceManager.getDefaultSharedPreferences(this).edit();
                 editor.putString("select_oc_account", accountName);
                 editor.apply();
@@ -1755,16 +1279,16 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             mAccountMgr.setUserData(mAccount, Constants.KEY_OC_VERSION, mServerInfo.mVersion.getVersion());
             mAccountMgr.setUserData(mAccount, Constants.KEY_OC_BASE_URL, mServerInfo.mBaseUrl);
 
-            ArrayList<Object> authResultData = authResult.getData();
-            if (authResultData == null || authResultData.size() == 0) {
+            UserInfo userInfo = authResult.getResultData();
+            if (userInfo == null) {
                 Log_OC.e(this, "Could not read user data!");
                 return false;
             }
 
-            UserInfo userInfo = (UserInfo) authResultData.get(0);
             mAccountMgr.setUserData(mAccount, Constants.KEY_DISPLAY_NAME, userInfo.getDisplayName());
             mAccountMgr.setUserData(mAccount, Constants.KEY_USER_ID, userInfo.getId());
-            mAccountMgr.setUserData(mAccount, Constants.KEY_OC_ACCOUNT_VERSION,
+            mAccountMgr.setUserData(mAccount,
+                                    Constants.KEY_OC_ACCOUNT_VERSION,
                                     Integer.toString(UserAccountManager.ACCOUNT_VERSION_WITH_PROPER_ID));
 
 
@@ -1772,11 +1296,7 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
             setResult(RESULT_OK, intent);
 
             // notify Document Provider
-            if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                String authority = getResources().getString(R.string.document_provider_authority);
-                Uri rootsUri = DocumentsContract.buildRootsUri(authority);
-                getContentResolver().notifyChange(rootsUri, null);
-            }
+            DocumentsStorageProvider.notifyRootsChanged(this);
 
             return true;
         }
@@ -1791,142 +1311,67 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
     }
 
     private void startQRScanner() {
-        Intent i = new Intent(this, QrCodeActivity.class);
-        startActivityForResult(i, REQUEST_CODE_QR_SCAN);
+        Intent intent = new Intent(this, QrCodeActivity.class);
+        startActivityForResult(intent, REQUEST_CODE_QR_SCAN);
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String permissions[],
+    public void onRequestPermissionsResult(int requestCode,
+                                           @NonNull String[] permissions,
                                            @NonNull int[] grantResults) {
-        switch (requestCode) {
-            case PermissionUtil.PERMISSIONS_CAMERA: {
-                // If request is cancelled, result arrays are empty.
-                if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    // permission was granted
-                    startQRScanner();
-                } else {
-                    // permission denied
-                    return;
-                }
-                return;
+        if (requestCode == PermissionUtil.PERMISSIONS_CAMERA) {// If request is cancelled, result arrays are empty.
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // permission was granted
+                startQRScanner();
             }
-
-            default:
-                super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        } else {
+            super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         }
     }
 
     /**
-    /**
-     * Updates the content and visibility state of the icon and text associated
-     * to the last check on the ownCloud server.
+     * /** Updates the content and visibility state of the icon and text associated to the last check on the ownCloud
+     * server.
      */
     private void showServerStatus() {
         if (mServerStatusIcon == NO_ICON && EMPTY_STRING.equals(mServerStatusText)) {
-            mServerStatusView.setVisibility(View.INVISIBLE);
+            accountSetupBinding.serverStatusText.setVisibility(View.INVISIBLE);
         } else {
-            mServerStatusView.setText(mServerStatusText);
-            mServerStatusView.setCompoundDrawablesWithIntrinsicBounds(mServerStatusIcon, 0, 0, 0);
-            mServerStatusView.setVisibility(View.VISIBLE);
+            accountSetupBinding.serverStatusText.setText(mServerStatusText);
+            accountSetupBinding.serverStatusText.setCompoundDrawablesWithIntrinsicBounds(mServerStatusIcon, 0, 0, 0);
+            accountSetupBinding.serverStatusText.setVisibility(View.VISIBLE);
         }
     }
 
     /**
-     * Updates the content and visibility state of the icon and text associated
-     * to the interactions with the OAuth authorization server.
+     * Updates the content and visibility state of the icon and text associated to the interactions with the OAuth
+     * authorization server.
      */
     private void showAuthStatus() {
-        if (mAuthStatusIcon == NO_ICON && EMPTY_STRING.equals(mAuthStatusText)) {
-            mAuthStatusView.setVisibility(View.INVISIBLE);
-        } else {
-            mAuthStatusView.setText(mAuthStatusText);
-            mAuthStatusView.setCompoundDrawablesWithIntrinsicBounds(mAuthStatusIcon, 0, 0, 0);
-            mAuthStatusView.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private void showRefreshButton(boolean show) {
-        if (webViewLoginMethod && mRefreshButton != null) {
-            if (show) {
-                mRefreshButton.setVisibility(View.VISIBLE);
+        if (accountSetupBinding != null) {
+            if (mAuthStatusIcon == NO_ICON && EMPTY_STRING.equals(mAuthStatusText)) {
+                accountSetupBinding.authStatusText.setVisibility(View.INVISIBLE);
             } else {
-                mRefreshButton.setVisibility(View.GONE);
+                accountSetupBinding.authStatusText.setText(mAuthStatusText);
+                accountSetupBinding.authStatusText.setCompoundDrawablesWithIntrinsicBounds(mAuthStatusIcon, 0, 0, 0);
+                accountSetupBinding.authStatusText.setVisibility(View.VISIBLE);
             }
         }
-    }
-
-    /**
-     * Called when the eye icon in the password field is clicked.
-     *
-     * Toggles the visibility of the password in the field.
-     */
-    public void onViewPasswordClick() {
-        int selectionStart = mPasswordInput.getSelectionStart();
-        int selectionEnd = mPasswordInput.getSelectionEnd();
-        if (isPasswordVisible()) {
-            hidePassword();
-        } else {
-            showPassword();
-        }
-        mPasswordInput.setSelection(selectionStart, selectionEnd);
     }
 
     /**
      * Called when the 'action' button in an IME is pressed ('enter' in software keyboard).
-     *
-     * Used to trigger the authentication check when the user presses 'enter' after writing the
-     * password, or to throw the server test when the only field on screen is the URL input field.
+     * <p>
+     * Used to trigger the authentication check when the user presses 'enter' after writing the password, or to throw
+     * the server test when the only field on screen is the URL input field.
      */
     @Override
     public boolean onEditorAction(TextView inputField, int actionId, KeyEvent event) {
-        if (actionId == EditorInfo.IME_ACTION_DONE && inputField != null &&
-                inputField.equals(mPasswordInput)) {
-            if (mOkButton.isEnabled()) {
-                mOkButton.performClick();
-            }
-
-        } else if ((actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_NULL)
-                && inputField != null && inputField.equals(mHostUrlInput)) {
+        if ((actionId == EditorInfo.IME_ACTION_NEXT || actionId == EditorInfo.IME_NULL)
+            && inputField != null && inputField.equals(accountSetupBinding.hostUrlInput)) {
             checkOcServer();
         }
         return false;   // always return false to grant that the software keyboard is hidden anyway
-    }
-
-
-    private abstract static class RightDrawableOnTouchListener implements OnTouchListener {
-
-        private static final int RIGHT_DRAWABLE_COMPOUND_DRAWABLES_LENGTH = 2;
-
-        private int fuzz = 75;
-
-        /**
-         * {@inheritDoc}
-         */
-        @Override
-        public boolean onTouch(View view, MotionEvent event) {
-            Drawable rightDrawable = null;
-            if (view instanceof TextView) {
-                Drawable[] drawables = ((TextView) view).getCompoundDrawables();
-                if (drawables.length > RIGHT_DRAWABLE_COMPOUND_DRAWABLES_LENGTH) {
-                    rightDrawable = drawables[2];
-                }
-            }
-            if (rightDrawable != null) {
-                final int x = (int) event.getX();
-                final int y = (int) event.getY();
-                final Rect bounds = rightDrawable.getBounds();
-                if (x >= (view.getRight() - bounds.width() - fuzz) &&
-                        x <= (view.getRight() - view.getPaddingRight() + fuzz) &&
-                        y >= (view.getPaddingTop() - fuzz) &&
-                        y <= (view.getHeight() - view.getPaddingBottom()) + fuzz) {
-
-                    return onDrawableTouch(event);
-                }
-            }
-            return false;
-        }
-
-        public abstract boolean onDrawableTouch(final MotionEvent event);
     }
 
     /**
@@ -1953,7 +1398,7 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
     private void showUntrustedCertDialog(RemoteOperationResult result) {
         // Show a dialog with the certificate info
         SslUntrustedCertDialog dialog = SslUntrustedCertDialog.
-                newInstanceForFullSslError((CertificateCombinedException) result.getException());
+            newInstanceForFullSslError((CertificateCombinedException) result.getException());
         FragmentManager fm = getSupportFragmentManager();
         FragmentTransaction ft = fm.beginTransaction();
         ft.addToBackStack(null);
@@ -1962,20 +1407,15 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
     }
 
     private void doOnResumeAndBound() {
-        //Log_OC.e(TAG, "registering to listen for operation callbacks" );
         mOperationsServiceBinder.addOperationListener(this, mHandler);
         if (mWaitingForOpId <= Integer.MAX_VALUE) {
             mOperationsServiceBinder.dispatchResultIfFinished((int) mWaitingForOpId, this);
         }
-
-        if (!webViewLoginMethod && !TextUtils.isEmpty(mHostUrlInput.getText()) && !mServerIsChecked) {
-            checkOcServer();
-        }
     }
 
 
-    private void dismissDialog(String dialogTag) {
-        Fragment frag = getSupportFragmentManager().findFragmentByTag(dialogTag);
+    private void dismissWaitingDialog() {
+        Fragment frag = getSupportFragmentManager().findFragmentByTag(WAIT_DIALOG_TAG);
         if (frag instanceof DialogFragment) {
             DialogFragment dialog = (DialogFragment) frag;
 
@@ -1996,26 +1436,25 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         @Override
         public void onServiceConnected(ComponentName component, IBinder service) {
             if (component.equals(
-                    new ComponentName(AuthenticatorActivity.this, OperationsService.class)
+                new ComponentName(AuthenticatorActivity.this, OperationsService.class)
             )) {
                 mOperationsServiceBinder = (OperationsServiceBinder) service;
 
                 Uri data = getIntent().getData();
                 if (data != null && data.toString().startsWith(getString(R.string.login_data_own_scheme))) {
-                    String prefix = getString(R.string.login_data_own_scheme) + PROTOCOL_SUFFIX + "login/";
-                    LoginUrlInfo loginUrlInfo = parseLoginDataUrl(prefix, data.toString());
+                    try {
+                        String prefix = getString(R.string.login_data_own_scheme) + PROTOCOL_SUFFIX + "login/";
+                        LoginUrlInfo loginUrlInfo = parseLoginDataUrl(prefix, data.toString());
 
-                    if (loginUrlInfo != null) {
-                        try {
-                            mServerInfo.mBaseUrl = AuthenticatorUrlUtils.normalizeUrlSuffix(loginUrlInfo.serverAddress);
-                            webViewUser = loginUrlInfo.username;
-                            webViewPassword = loginUrlInfo.password;
-                            doOnResumeAndBound();
-                        } catch (Exception e) {
-                            mServerStatusIcon = R.drawable.ic_alert;
-                            mServerStatusText = "QR Code could not be read!";
-                            showServerStatus();
-                        }
+                        mServerInfo.mBaseUrl = AuthenticatorUrlUtils.normalizeUrlSuffix(loginUrlInfo.serverAddress);
+                        webViewUser = loginUrlInfo.username;
+                        webViewPassword = loginUrlInfo.password;
+                        doOnResumeAndBound();
+                        checkOcServer();
+                    } catch (Exception e) {
+                        mServerStatusIcon = R.drawable.ic_alert;
+                        mServerStatusText = getString(R.string.qr_could_not_be_read);
+                        showServerStatus();
                     }
                 } else {
                     doOnResumeAndBound();
@@ -2026,42 +1465,12 @@ public class AuthenticatorActivity extends AccountAuthenticatorActivity
         @Override
         public void onServiceDisconnected(ComponentName component) {
             if (component.equals(
-                    new ComponentName(AuthenticatorActivity.this, OperationsService.class)
+                new ComponentName(AuthenticatorActivity.this, OperationsService.class)
             )) {
                 Log_OC.e(TAG, "Operations service crashed");
                 mOperationsServiceBinder = null;
             }
         }
-    }
-
-    /**
-     * Create and show dialog for request authentication to the user
-     *
-     * @param webView Web view to embed into the authentication dialog.
-     * @param handler Object responsible for catching and recovering HTTP authentication fails.
-     */
-    public void createAuthenticationDialog(WebView webView, HttpAuthHandler handler) {
-
-        // Show a dialog with the certificate info
-        CredentialsDialogFragment dialog = CredentialsDialogFragment.newInstanceForCredentials(webView, handler);
-        FragmentManager fm = getSupportFragmentManager();
-        FragmentTransaction ft = fm.beginTransaction();
-        ft.addToBackStack(null);
-        dialog.setCancelable(false);
-        dialog.show(ft, CREDENTIALS_DIALOG_TAG);
-
-        if (!mIsFirstAuthAttempt) {
-            DisplayUtils.showSnackMessage(this, R.string.saml_authentication_wrong_pass);
-        } else {
-            mIsFirstAuthAttempt = false;
-        }
-    }
-
-    /**
-     * For retrieving the clicking on authentication cancel button.
-     */
-    public void doNegativeAuthenticationDialogClick() {
-        mIsFirstAuthAttempt = true;
     }
 
     @Override

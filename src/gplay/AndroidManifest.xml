@@ -30,10 +30,13 @@
 
         <meta-data
             android:name="firebase_analytics_collection_deactivated"
-            android:value="true"/>
+            android:value="true" />
         <meta-data
             android:name="google_analytics_adid_collection_enabled"
-            android:value="false"/>
+            android:value="false" />
+        <meta-data
+            android:name="google_analytics_ssaid_collection_enabled"
+            android:value="false" />
 
         <activity
             android:name=".authentication.ModifiedAuthenticatorActivity"
@@ -64,19 +67,6 @@
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT"/>
             </intent-filter>
-        </service>
-
-        <service
-            android:name=".services.firebase.NCFirebaseInstanceIDService">
-            <intent-filter>
-                <action android:name="com.google.firebase.INSTANCE_ID_EVENT"/>
-            </intent-filter>
-        </service>
-
-        <service
-            android:name="com.evernote.android.job.gcm.PlatformGcmService"
-            android:enabled="true"
-            tools:node="remove">
         </service>
 
     </application>

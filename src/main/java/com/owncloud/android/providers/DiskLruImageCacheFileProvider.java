@@ -21,7 +21,6 @@
 
 package com.owncloud.android.providers;
 
-import android.accounts.Account;
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.database.Cursor;
@@ -31,6 +30,7 @@ import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
 import com.owncloud.android.MainApp;
 import com.owncloud.android.datamodel.FileDataStorageManager;
@@ -61,8 +61,8 @@ public class DiskLruImageCacheFileProvider extends ContentProvider {
     }
 
     private OCFile getFile(Uri uri) {
-        Account account = accountManager.getCurrentAccount();
-        FileDataStorageManager fileDataStorageManager = new FileDataStorageManager(account,
+        User user = accountManager.getUser();
+        FileDataStorageManager fileDataStorageManager = new FileDataStorageManager(user.toPlatformAccount(),
                 MainApp.getAppContext().getContentResolver());
 
         return fileDataStorageManager.getFileByPath(uri.getPath());
@@ -70,15 +70,17 @@ public class DiskLruImageCacheFileProvider extends ContentProvider {
 
     @Override
     public ParcelFileDescriptor openFile(@NonNull Uri uri, @NonNull String mode) throws FileNotFoundException {
-        OCFile ocFile = getFile(uri);
+        return getParcelFileDescriptorForOCFile(getFile(uri));
+    }
 
+    public static ParcelFileDescriptor getParcelFileDescriptorForOCFile(OCFile ocFile) throws FileNotFoundException {
         Bitmap thumbnail = ThumbnailsCacheManager.getBitmapFromDiskCache(
-                String.valueOf(ThumbnailsCacheManager.PREFIX_RESIZED_IMAGE + ocFile.getRemoteId()));
+            ThumbnailsCacheManager.PREFIX_RESIZED_IMAGE + ocFile.getRemoteId());
 
         // fallback to thumbnail
         if (thumbnail == null) {
             thumbnail = ThumbnailsCacheManager.getBitmapFromDiskCache(
-                    String.valueOf(ThumbnailsCacheManager.PREFIX_THUMBNAIL + ocFile.getRemoteId()));
+                ThumbnailsCacheManager.PREFIX_THUMBNAIL + ocFile.getRemoteId());
         }
 
         // fallback to default image

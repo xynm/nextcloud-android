@@ -21,7 +21,7 @@ import android.app.Dialog;
 import android.os.Bundle;
 
 import com.owncloud.android.R;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeButtonUtils;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
@@ -32,7 +32,7 @@ public class ConfirmationDialogFragment extends DialogFragment {
 
     final static String ARG_MESSAGE_RESOURCE_ID = "resource_id";
     final static String ARG_MESSAGE_ARGUMENTS = "string_array";
-    private static final String ARG_TITLE_ID = "title_id";
+    final static String ARG_TITLE_ID = "title_id";
 
     final static String ARG_POSITIVE_BTN_RES = "positive_btn_res";
     final static String ARG_NEUTRAL_BTN_RES = "neutral_btn_res";
@@ -75,12 +75,11 @@ public class ConfirmationDialogFragment extends DialogFragment {
     public void onStart() {
         super.onStart();
 
-        int color = ThemeUtils.primaryAccentColor(getContext());
-
         AlertDialog alertDialog = (AlertDialog) getDialog();
 
-        alertDialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(color);
-        alertDialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(color);
+        ThemeButtonUtils.themeBorderlessButton(alertDialog.getButton(AlertDialog.BUTTON_POSITIVE),
+                                               alertDialog.getButton(AlertDialog.BUTTON_NEGATIVE),
+                                               alertDialog.getButton(AlertDialog.BUTTON_NEUTRAL));
     }
 
     public void setOnConfirmationListener(ConfirmationDialogFragmentListener listener) {

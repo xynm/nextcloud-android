@@ -25,83 +25,97 @@
 package com.owncloud.android.ui.adapter;
 
 import android.content.Context;
+import android.graphics.drawable.Drawable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
-import android.widget.TextView;
 
 import com.bumptech.glide.Glide;
 import com.nextcloud.client.account.CurrentAccountProvider;
+import com.nextcloud.client.network.ClientFactory;
 import com.owncloud.android.R;
-import com.owncloud.android.datamodel.Template;
-import com.owncloud.android.ui.dialog.ChooseTemplateDialogFragment;
+import com.owncloud.android.databinding.TemplateButtonBinding;
+import com.owncloud.android.lib.common.Template;
+import com.owncloud.android.lib.common.TemplateList;
+import com.owncloud.android.utils.MimeTypeUtil;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
 import com.owncloud.android.utils.glide.CustomGlideStreamLoader;
-
-import java.util.ArrayList;
-import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
-import butterknife.BindView;
-import butterknife.ButterKnife;
 
 /**
  * Adapter for handling Templates, used to create files out of it via RichDocuments app
  */
 public class TemplateAdapter extends RecyclerView.Adapter<TemplateAdapter.ViewHolder> {
 
-    private List<Template> templateList = new ArrayList<>();
+    private TemplateList templateList = new TemplateList();
     private ClickListener clickListener;
     private Context context;
-    private ChooseTemplateDialogFragment.Type type;
     private CurrentAccountProvider currentAccountProvider;
+    private ClientFactory clientFactory;
+    private String mimetype;
+    private Template selectedTemplate;
+    private final int colorSelected;
+    private final int colorUnselected;
 
     public TemplateAdapter(
-        ChooseTemplateDialogFragment.Type type,
+        String mimetype,
         ClickListener clickListener,
         Context context,
-        CurrentAccountProvider currentAccountProvider
+        CurrentAccountProvider currentAccountProvider,
+        ClientFactory clientFactory
     ) {
+        this.mimetype = mimetype;
         this.clickListener = clickListener;
-        this.type = type;
         this.context = context;
         this.currentAccountProvider = currentAccountProvider;
+        this.clientFactory = clientFactory;
+        colorSelected = ThemeColorUtils.primaryColor(context, true);
+        colorUnselected = context.getResources().getColor(R.color.grey_200);
     }
 
     @NonNull
     @Override
     public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        return new ViewHolder(LayoutInflater.from(parent.getContext()).inflate(R.layout.template_button, parent, false));
+        return new TemplateAdapter.ViewHolder(
+            TemplateButtonBinding.inflate(LayoutInflater.from(parent.getContext()),
+                                          parent,
+                                          false)
+        );
     }
 
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
-        holder.setData(templateList.get(position));
+        holder.setData(templateList.getTemplateList().get(position));
     }
 
-    public void setTemplateList(List<Template> templateList) {
+    public void setTemplateList(TemplateList templateList) {
         this.templateList = templateList;
+    }
+
+    public void setTemplateAsActive(Template template) {
+        selectedTemplate = template;
+        notifyDataSetChanged();
+    }
+
+    public Template getSelectedTemplate() {
+        return selectedTemplate;
     }
 
     @Override
     public int getItemCount() {
-        return templateList.size();
+        return templateList.getTemplateList().size();
     }
 
     public class ViewHolder extends RecyclerView.ViewHolder implements View.OnClickListener {
 
-        @BindView(R.id.name)
-        public TextView name;
-
-        @BindView(R.id.thumbnail)
-        public ImageView thumbnail;
-
+        private final TemplateButtonBinding binding;
         private Template template;
 
-        public ViewHolder(View itemView) {
-            super(itemView);
-            ButterKnife.bind(this, itemView);
+        public ViewHolder(@NonNull TemplateButtonBinding binding) {
+            super(binding.getRoot());
+            this.binding = binding;
             itemView.setOnClickListener(this);
         }
 
@@ -115,32 +129,24 @@ public class TemplateAdapter extends RecyclerView.Adapter<TemplateAdapter.ViewHo
         public void setData(Template template) {
             this.template = template;
 
-            int placeholder;
+            Drawable placeholder = MimeTypeUtil.getFileTypeIcon(mimetype,
+                                                                template.getTitle(),
+                                                                currentAccountProvider.getUser(),
+                                                                context);
 
-            switch (type) {
-                case DOCUMENT:
-                    placeholder = R.drawable.file_doc;
-                    break;
+            Glide.with(context).using(new CustomGlideStreamLoader(currentAccountProvider, clientFactory))
+                .load(template.getPreview())
+                .placeholder(placeholder)
+                .error(placeholder)
+                .into(binding.template);
 
-                case SPREADSHEET:
-                    placeholder = R.drawable.file_xls;
-                    break;
+            binding.templateName.setText(template.getTitle());
 
-                case PRESENTATION:
-                    placeholder = R.drawable.file_ppt;
-                    break;
-
-                default:
-                    placeholder = R.drawable.file;
-                    break;
+            if (template == selectedTemplate) {
+                binding.templateContainer.setStrokeColor(colorSelected);
+            } else {
+                binding.templateContainer.setStrokeColor(colorUnselected);
             }
-
-            Glide.with(context).using(new CustomGlideStreamLoader(currentAccountProvider)).load(template.getThumbnailLink())
-                    .placeholder(placeholder)
-                    .error(placeholder)
-                    .into(thumbnail);
-
-            name.setText(template.getName());
         }
     }
 

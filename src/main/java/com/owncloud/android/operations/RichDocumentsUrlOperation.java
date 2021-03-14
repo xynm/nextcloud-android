@@ -24,15 +24,21 @@ import com.owncloud.android.lib.common.OwnCloudClient;
 import com.owncloud.android.lib.common.operations.RemoteOperation;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.lib.common.utils.Log_OC;
+import com.owncloud.android.utils.NextcloudServer;
 
 import org.apache.commons.httpclient.HttpStatus;
-import org.apache.commons.httpclient.methods.PostMethod;
+import org.apache.commons.httpclient.methods.Utf8PostMethod;
 import org.json.JSONObject;
 
 /**
  * Edit a file with Richdocuments. Returns URL which can be shown in WebView.
  */
 public class RichDocumentsUrlOperation extends RemoteOperation {
+
+    /**
+     * TODO move to library
+     */
+
     private static final String TAG = RichDocumentsUrlOperation.class.getSimpleName();
     private static final int SYNC_READ_TIMEOUT = 40000;
     private static final int SYNC_CONNECTION_TIMEOUT = 5000;
@@ -51,12 +57,13 @@ public class RichDocumentsUrlOperation extends RemoteOperation {
         this.fileID = fileID;
     }
 
+    @NextcloudServer(max = 18)
     protected RemoteOperationResult run(OwnCloudClient client) {
         RemoteOperationResult result;
-        PostMethod postMethod = null;
+        Utf8PostMethod postMethod = null;
 
         try {
-            postMethod = new PostMethod(client.getBaseUri() + DOCUMENT_URL + JSON_FORMAT);
+            postMethod = new Utf8PostMethod(client.getBaseUri() + DOCUMENT_URL + JSON_FORMAT);
             postMethod.setParameter(FILE_ID, fileID);
 
             // remote request
@@ -80,7 +87,7 @@ public class RichDocumentsUrlOperation extends RemoteOperation {
         } catch (Exception e) {
             result = new RemoteOperationResult(e);
             Log_OC.e(TAG, "Get rich document url for file with id " + fileID + " failed: " + result.getLogMessage(),
-                    result.getException());
+                     result.getException());
         } finally {
             if (postMethod != null) {
                 postMethod.releaseConnection();

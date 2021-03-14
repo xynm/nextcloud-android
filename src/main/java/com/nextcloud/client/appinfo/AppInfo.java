@@ -19,6 +19,8 @@
  */
 package com.nextcloud.client.appinfo;
 
+import android.content.Context;
+
 /**
  * This class provides general, static information about application
  * build.
@@ -34,6 +36,9 @@ public interface AppInfo {
      */
     String getFormattedVersionCode();
 
+    int getVersionCode();
+
     boolean isDebugBuild();
 
+    String getAppVersion(Context context);
 }

@@ -32,11 +32,10 @@ import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.lib.resources.files.RenameFileRemoteOperation;
 import com.owncloud.android.operations.common.SyncOperation;
 import com.owncloud.android.utils.FileStorageUtils;
+import com.owncloud.android.utils.MimeTypeUtil;
 
 import java.io.File;
 import java.io.IOException;
-
-import lombok.Getter;
 
 
 /**
@@ -46,7 +45,7 @@ public class RenameFileOperation extends SyncOperation {
 
     private static final String TAG = RenameFileOperation.class.getSimpleName();
 
-    @Getter private OCFile file;
+    private OCFile file;
     private String remotePath;
     private String newName;
 
@@ -91,8 +90,11 @@ public class RenameFileOperation extends SyncOperation {
                 return new RemoteOperationResult(ResultCode.INVALID_OVERWRITE);
             }
 
-            result = new RenameFileRemoteOperation(file.getFileName(), file.getRemotePath(), newName,
-                                                   file.isFolder()).execute(client);
+            result = new RenameFileRemoteOperation(file.getFileName(),
+                                                   file.getRemotePath(),
+                                                   newName,
+                                                   file.isFolder())
+                .execute(client);
 
             if (result.isSuccess()) {
                 if (file.isFolder()) {
@@ -105,7 +107,7 @@ public class RenameFileOperation extends SyncOperation {
             }
 
         } catch (IOException e) {
-            Log_OC.e(TAG, "Rename " + file.getRemotePath() + " to " + ((newRemotePath ==null) ?
+            Log_OC.e(TAG, "Rename " + file.getRemotePath() + " to " + ((newRemotePath == null) ?
                 newName : newRemotePath) + ": " +
                     (result!= null ? result.getLogMessage() : ""), e);
         }
@@ -130,8 +132,10 @@ public class RenameFileOperation extends SyncOperation {
 
                 // notify MediaScanner about removed file
                 getStorageManager().deleteFileInMediaScan(oldPath);
-                // notify to scan about new file
-                FileDataStorageManager.triggerMediaScan(newPath);
+                // notify to scan about new file, if it is a media file
+                if (MimeTypeUtil.isMedia(file.getMimeType())) {
+                    FileDataStorageManager.triggerMediaScan(newPath, file);
+                }
             }
             // else - NOTHING: the link to the local file is kept although the local name
             // can't be updated
@@ -186,5 +190,9 @@ public class RenameFileOperation extends SyncOperation {
         testFile.delete();
 
         return result;
+    }
+
+    public OCFile getFile() {
+        return this.file;
     }
 }

@@ -25,7 +25,6 @@ import android.view.MenuItem;
 
 import com.owncloud.android.R;
 import com.owncloud.android.lib.resources.shares.OCShare;
-import com.owncloud.android.lib.resources.status.OCCapability;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -65,11 +64,13 @@ public final class SharingMenuHelper {
 
     /**
      * Sets checked/visibility state on the given {@link MenuItem} based on the given criteria.
-     *  @param menuItem the {@link MenuItem} to be setup
-     * @param capabilities Capabilities of server to check if hide download is supported
+     *
+     * @param menuItem the {@link MenuItem} to be setup
      */
-    public static void setupHideFileDownload(MenuItem menuItem, boolean hideFileDownload, OCCapability capabilities) {
-        if (!capabilities.getVersion().isHideFileDownloadSupported()) {
+    public static void setupHideFileDownload(MenuItem menuItem,
+                                             boolean hideFileDownload,
+                                             boolean isFileDrop) {
+        if (isFileDrop) {
             menuItem.setVisible(false);
         } else {
             menuItem.setVisible(true);

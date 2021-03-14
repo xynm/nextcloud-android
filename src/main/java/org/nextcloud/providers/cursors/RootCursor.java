@@ -21,17 +21,13 @@
 package org.nextcloud.providers.cursors;
 
 import android.accounts.Account;
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.database.MatrixCursor;
-import android.os.Build;
 import android.provider.DocumentsContract.Root;
 
 import com.owncloud.android.R;
 import com.owncloud.android.providers.DocumentsStorageProvider;
 
-
-@TargetApi(Build.VERSION_CODES.KITKAT)
 public class RootCursor extends MatrixCursor {
 
     private static final String[] DEFAULT_ROOT_PROJECTION = new String[] {
@@ -47,10 +43,11 @@ public class RootCursor extends MatrixCursor {
     public void addRoot(DocumentsStorageProvider.Document document, Context context) {
         Account account = document.getAccount();
 
-        int rootFlags = Root.FLAG_SUPPORTS_CREATE | Root.FLAG_SUPPORTS_RECENTS | Root.FLAG_SUPPORTS_SEARCH;
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            rootFlags = rootFlags | Root.FLAG_SUPPORTS_IS_CHILD;
-        }
+        int rootFlags =
+            Root.FLAG_SUPPORTS_CREATE |
+                Root.FLAG_SUPPORTS_RECENTS |
+                Root.FLAG_SUPPORTS_SEARCH |
+                Root.FLAG_SUPPORTS_IS_CHILD;
 
         newRow().add(Root.COLUMN_ROOT_ID, account.name)
             .add(Root.COLUMN_DOCUMENT_ID, document.getDocumentId())

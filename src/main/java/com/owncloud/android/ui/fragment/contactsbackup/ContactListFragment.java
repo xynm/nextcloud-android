@@ -4,6 +4,7 @@
  * @author Tobias Kaminsky
  * Copyright (C) 2017 Tobias Kaminsky
  * Copyright (C) 2017 Nextcloud GmbH.
+ * Copyright (C) 2020 Chris Narkiewicz <hello@ezaquarii.com>
  * <p>
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -22,19 +23,15 @@
 package com.owncloud.android.ui.fragment.contactsbackup;
 
 import android.Manifest;
-import android.accounts.Account;
-import android.content.BroadcastReceiver;
+import android.app.Activity;
 import android.content.Context;
 import android.content.DialogInterface;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.provider.ContactsContract;
@@ -45,27 +42,26 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
 import android.widget.CheckedTextView;
 import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.ProgressBar;
-import android.widget.RelativeLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import com.bumptech.glide.request.animation.GlideAnimation;
 import com.bumptech.glide.request.target.SimpleTarget;
-import com.evernote.android.job.JobRequest;
-import com.evernote.android.job.util.support.PersistableBundleCompat;
 import com.google.android.material.snackbar.Snackbar;
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
 import com.nextcloud.client.di.Injectable;
+import com.nextcloud.client.files.downloader.Direction;
+import com.nextcloud.client.files.downloader.Request;
+import com.nextcloud.client.files.downloader.Transfer;
+import com.nextcloud.client.files.downloader.TransferManagerConnection;
+import com.nextcloud.client.files.downloader.TransferState;
+import com.nextcloud.client.jobs.BackgroundJobManager;
+import com.nextcloud.client.network.ClientFactory;
 import com.owncloud.android.R;
-import com.owncloud.android.datamodel.FileDataStorageManager;
+import com.owncloud.android.databinding.ContactlistFragmentBinding;
 import com.owncloud.android.datamodel.OCFile;
-import com.owncloud.android.files.services.FileDownloader;
-import com.owncloud.android.jobs.ContactsImportJob;
 import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.ui.TextDrawable;
 import com.owncloud.android.ui.activity.ContactsPreferenceActivity;
@@ -74,12 +70,12 @@ import com.owncloud.android.ui.fragment.FileFragment;
 import com.owncloud.android.utils.BitmapUtils;
 import com.owncloud.android.utils.DisplayUtils;
 import com.owncloud.android.utils.PermissionUtil;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
+import com.owncloud.android.utils.theme.ThemeToolbarUtils;
 
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
 import org.greenrobot.eventbus.ThreadMode;
-import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.io.IOException;
@@ -99,11 +95,10 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.core.graphics.drawable.RoundedBitmapDrawable;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
-import butterknife.BindView;
-import butterknife.ButterKnife;
 import ezvcard.Ezvcard;
 import ezvcard.VCard;
 import ezvcard.property.Photo;
+import kotlin.Unit;
 
 import static com.owncloud.android.ui.fragment.contactsbackup.ContactListFragment.getDisplayName;
 
@@ -114,49 +109,27 @@ public class ContactListFragment extends FileFragment implements Injectable {
     public static final String TAG = ContactListFragment.class.getSimpleName();
 
     public static final String FILE_NAME = "FILE_NAME";
-    public static final String ACCOUNT = "ACCOUNT";
+    public static final String USER = "USER";
     public static final String CHECKED_ITEMS_ARRAY_KEY = "CHECKED_ITEMS";
 
     private static final int SINGLE_ACCOUNT = 1;
 
-    @BindView(R.id.contactlist_recyclerview)
-    public RecyclerView recyclerView;
-
-    @BindView(R.id.contactlist_restore_selected_container)
-    public LinearLayout restoreContactsContainer;
-
-    @BindView(R.id.contactlist_restore_selected)
-    public Button restoreContacts;
-
-    @BindView(R.id.empty_list_view_text)
-    public TextView emptyContentMessage;
-
-    @BindView(R.id.empty_list_view_headline)
-    public TextView emptyContentHeadline;
-
-    @BindView(R.id.empty_list_icon)
-    public ImageView emptyContentIcon;
-
-    @BindView(R.id.empty_list_progress)
-    public ProgressBar emptyContentProgressBar;
-
-    @BindView(R.id.empty_list_container)
-    public RelativeLayout emptyListContainer;
-
+    private ContactlistFragmentBinding binding;
 
     private ContactListAdapter contactListAdapter;
-    private Account account;
-    private List<VCard> vCards = new ArrayList<>();
+    private final List<VCard> vCards = new ArrayList<>();
     private OCFile ocFile;
     @Inject UserAccountManager accountManager;
+    @Inject ClientFactory clientFactory;
+    @Inject BackgroundJobManager backgroundJobManager;
+    private TransferManagerConnection fileDownloader;
 
-    public static ContactListFragment newInstance(OCFile file, Account account) {
+    public static ContactListFragment newInstance(OCFile file, User user) {
         ContactListFragment frag = new ContactListFragment();
         Bundle arguments = new Bundle();
         arguments.putParcelable(FILE_NAME, file);
-        arguments.putParcelable(ACCOUNT, account);
+        arguments.putParcelable(USER, user);
         frag.setArguments(arguments);
-
         return frag;
     }
 
@@ -164,7 +137,7 @@ public class ContactListFragment extends FileFragment implements Injectable {
      * {@inheritDoc}
      */
     @Override
-    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+    public void onCreateOptionsMenu(@NonNull Menu menu, @NonNull MenuInflater inflater) {
         super.onCreateOptionsMenu(menu, inflater);
         inflater.inflate(R.menu.fragment_contact_list, menu);
     }
@@ -172,8 +145,8 @@ public class ContactListFragment extends FileFragment implements Injectable {
     @Override
     public View onCreateView(@NonNull final LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
 
-        View view = inflater.inflate(R.layout.contactlist_fragment, container, false);
-        ButterKnife.bind(this, view);
+        binding = ContactlistFragmentBinding.inflate(inflater, container, false);
+        View view = binding.getRoot();
 
         setHasOptionsMenu(true);
 
@@ -182,16 +155,14 @@ public class ContactListFragment extends FileFragment implements Injectable {
         if (contactsPreferenceActivity != null) {
             ActionBar actionBar = contactsPreferenceActivity.getSupportActionBar();
             if (actionBar != null) {
-                ThemeUtils.setColoredTitle(actionBar, R.string.actionbar_contacts_restore, getContext());
+                ThemeToolbarUtils.setColoredTitle(actionBar, R.string.actionbar_contacts_restore, getContext());
                 actionBar.setDisplayHomeAsUpEnabled(true);
             }
             contactsPreferenceActivity.setDrawerIndicatorEnabled(false);
         }
 
-        recyclerView = view.findViewById(R.id.contactlist_recyclerview);
-
         if (savedInstanceState == null) {
-            contactListAdapter = new ContactListAdapter(accountManager, getContext(), vCards);
+            contactListAdapter = new ContactListAdapter(accountManager, clientFactory, getContext(), vCards);
         } else {
             Set<Integer> checkedItems = new HashSet<>();
             int[] itemsArray = savedInstanceState.getIntArray(CHECKED_ITEMS_ARRAY_KEY);
@@ -205,41 +176,42 @@ public class ContactListFragment extends FileFragment implements Injectable {
             }
             contactListAdapter = new ContactListAdapter(accountManager, getContext(), vCards, checkedItems);
         }
-        recyclerView.setAdapter(contactListAdapter);
-        recyclerView.setLayoutManager(new LinearLayoutManager(getContext()));
+        binding.contactlistRecyclerview.setAdapter(contactListAdapter);
+        binding.contactlistRecyclerview.setLayoutManager(new LinearLayoutManager(getContext()));
 
         ocFile = getArguments().getParcelable(FILE_NAME);
         setFile(ocFile);
-        account = getArguments().getParcelable(ACCOUNT);
-
+        User user = getArguments().getParcelable(USER);
+        fileDownloader = new TransferManagerConnection(getActivity(), user);
+        fileDownloader.registerTransferListener(this::onDownloadUpdate);
+        fileDownloader.bind();
         if (!ocFile.isDown()) {
-            Intent i = new Intent(getContext(), FileDownloader.class);
-            i.putExtra(FileDownloader.EXTRA_ACCOUNT, account);
-            i.putExtra(FileDownloader.EXTRA_FILE, ocFile);
-            getContext().startService(i);
-
-            // Listen for download messages
-            IntentFilter downloadIntentFilter = new IntentFilter(FileDownloader.getDownloadAddedMessage());
-            downloadIntentFilter.addAction(FileDownloader.getDownloadFinishMessage());
-            DownloadFinishReceiver mDownloadFinishReceiver = new DownloadFinishReceiver();
-            getContext().registerReceiver(mDownloadFinishReceiver, downloadIntentFilter);
+            Request request = new Request(user, ocFile, Direction.DOWNLOAD);
+            fileDownloader.enqueue(request);
         } else {
             loadContactsTask.execute();
         }
 
-        restoreContacts.setOnClickListener(new View.OnClickListener() {
+        binding.contactlistRestoreSelected.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-
                 if (checkAndAskForContactsWritePermission()) {
                     getAccountForImport();
                 }
             }
         });
 
-        restoreContacts.setTextColor(ThemeUtils.primaryAccentColor(getContext()));
+        binding.contactlistRestoreSelected.setTextColor(ThemeColorUtils.primaryAccentColor(getContext()));
 
         return view;
+    }
+
+    @Override
+    public void onDetach() {
+        super.onDetach();
+        if (fileDownloader != null) {
+            fileDownloader.unbind();
+        }
     }
 
     @Override
@@ -251,9 +223,9 @@ public class ContactListFragment extends FileFragment implements Injectable {
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void onMessageEvent(VCardToggleEvent event) {
         if (event.showRestoreButton) {
-            restoreContactsContainer.setVisibility(View.VISIBLE);
+            binding.contactlistRestoreSelectedContainer.setVisibility(View.VISIBLE);
         } else {
-            restoreContactsContainer.setVisibility(View.GONE);
+            binding.contactlistRestoreSelectedContainer.setVisibility(View.GONE);
         }
     }
 
@@ -262,6 +234,12 @@ public class ContactListFragment extends FileFragment implements Injectable {
         super.onDestroy();
         ContactsPreferenceActivity contactsPreferenceActivity = (ContactsPreferenceActivity) getActivity();
         contactsPreferenceActivity.setDrawerIndicatorEnabled(true);
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+        binding = null;
     }
 
     public void onResume() {
@@ -309,11 +287,7 @@ public class ContactListFragment extends FileFragment implements Injectable {
     }
 
     private void setLoadingMessage() {
-        emptyContentHeadline.setText(R.string.file_list_loading);
-        emptyContentMessage.setText("");
-
-        emptyContentIcon.setVisibility(View.GONE);
-        emptyContentProgressBar.setVisibility(View.VISIBLE);
+        binding.loadingListContainer.setVisibility(View.VISIBLE);
     }
 
     private void setSelectAllMenuItem(MenuItem selectAll, boolean checked) {
@@ -360,22 +334,19 @@ public class ContactListFragment extends FileFragment implements Injectable {
         }
     }
 
-    private void importContacts(ContactAccount account) {
-        PersistableBundleCompat bundle = new PersistableBundleCompat();
-        bundle.putString(ContactsImportJob.ACCOUNT_NAME, account.name);
-        bundle.putString(ContactsImportJob.ACCOUNT_TYPE, account.type);
-        bundle.putString(ContactsImportJob.VCARD_FILE_PATH, getFile().getStoragePath());
-        bundle.putIntArray(ContactsImportJob.CHECKED_ITEMS_ARRAY, contactListAdapter.getCheckedIntArray());
+    private void importContacts(ContactsAccount account) {
+        backgroundJobManager.startImmediateContactsImport(account.name,
+                                                          account.type,
+                                                          getFile().getStoragePath(),
+                                                          contactListAdapter.getCheckedIntArray());
 
-        new JobRequest.Builder(ContactsImportJob.TAG)
-                .setExtras(bundle)
-                .startNow()
-                .setRequiresCharging(false)
-                .setUpdateCurrent(false)
-                .build()
-                .schedule();
-
-        Snackbar.make(recyclerView, R.string.contacts_preferences_import_scheduled, Snackbar.LENGTH_LONG).show();
+        Snackbar
+            .make(
+                binding.contactlistRecyclerview,
+                R.string.contacts_preferences_import_scheduled,
+                Snackbar.LENGTH_LONG
+                 )
+            .show();
 
         Handler handler = new Handler();
         handler.postDelayed(new Runnable() {
@@ -391,28 +362,28 @@ public class ContactListFragment extends FileFragment implements Injectable {
     }
 
     private void getAccountForImport() {
-        final ArrayList<ContactAccount> accounts = new ArrayList<>();
+        final ArrayList<ContactsAccount> contactsAccounts = new ArrayList<>();
 
         // add local one
-        accounts.add(new ContactAccount("Local contacts", null, null));
+        contactsAccounts.add(new ContactsAccount("Local contacts", null, null));
 
         Cursor cursor = null;
         try {
             cursor = getContext().getContentResolver().query(ContactsContract.RawContacts.CONTENT_URI,
-                    new String[]{ContactsContract.RawContacts.ACCOUNT_NAME, ContactsContract.RawContacts.ACCOUNT_TYPE},
-                    null,
-                    null,
-                    null);
+                                                             new String[]{ContactsContract.RawContacts.ACCOUNT_NAME, ContactsContract.RawContacts.ACCOUNT_TYPE},
+                                                             null,
+                                                             null,
+                                                             null);
 
             if (cursor != null && cursor.getCount() > 0) {
                 while (cursor.moveToNext()) {
                     String name = cursor.getString(cursor.getColumnIndex(ContactsContract.RawContacts.ACCOUNT_NAME));
                     String type = cursor.getString(cursor.getColumnIndex(ContactsContract.RawContacts.ACCOUNT_TYPE));
 
-                    ContactAccount account = new ContactAccount(name, name, type);
+                    ContactsAccount account = new ContactsAccount(name, name, type);
 
-                    if (!accounts.contains(account)) {
-                        accounts.add(account);
+                    if (!contactsAccounts.contains(account)) {
+                        contactsAccounts.add(account);
                     }
                 }
 
@@ -426,18 +397,18 @@ public class ContactListFragment extends FileFragment implements Injectable {
             }
         }
 
-        if (accounts.size() == SINGLE_ACCOUNT) {
-            importContacts(accounts.get(0));
+        if (contactsAccounts.size() == SINGLE_ACCOUNT) {
+            importContacts(contactsAccounts.get(0));
         } else {
-            ArrayAdapter adapter = new ArrayAdapter<>(getContext(), android.R.layout.simple_list_item_1, accounts);
+            ArrayAdapter adapter = new ArrayAdapter<>(getContext(), android.R.layout.simple_list_item_1, contactsAccounts);
             AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
             builder.setTitle(R.string.contactlist_account_chooser_title)
-                    .setAdapter(adapter, new DialogInterface.OnClickListener() {
-                        @Override
-                        public void onClick(DialogInterface dialog, int which) {
-                            importContacts(accounts.get(which));
-                        }
-                    }).show();
+                .setAdapter(adapter, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        importContacts(contactsAccounts.get(which));
+                    }
+                }).show();
         }
     }
 
@@ -445,7 +416,7 @@ public class ContactListFragment extends FileFragment implements Injectable {
         // check permissions
         if (!PermissionUtil.checkSelfPermission(getContext(), Manifest.permission.WRITE_CONTACTS)) {
             requestPermissions(new String[]{Manifest.permission.WRITE_CONTACTS},
-                    PermissionUtil.PERMISSIONS_WRITE_CONTACTS);
+                               PermissionUtil.PERMISSIONS_WRITE_CONTACTS);
             return false;
         } else {
             return true;
@@ -464,7 +435,7 @@ public class ContactListFragment extends FileFragment implements Injectable {
                     } else {
                         if (getView() != null) {
                             Snackbar.make(getView(), R.string.contactlist_no_permission, Snackbar.LENGTH_LONG)
-                                    .show();
+                                .show();
                         } else {
                             Toast.makeText(getContext(), R.string.contactlist_no_permission, Toast.LENGTH_LONG).show();
                         }
@@ -475,12 +446,12 @@ public class ContactListFragment extends FileFragment implements Injectable {
         }
     }
 
-    private class ContactAccount {
+    private class ContactsAccount {
         private String displayName;
         private String name;
         private String type;
 
-        ContactAccount(String displayName, String name, String type) {
+        ContactsAccount(String displayName, String name, String type) {
             this.displayName = displayName;
             this.name = name;
             this.type = type;
@@ -488,15 +459,15 @@ public class ContactListFragment extends FileFragment implements Injectable {
 
         @Override
         public boolean equals(Object obj) {
-            if (obj instanceof ContactAccount) {
-                ContactAccount other = (ContactAccount) obj;
+            if (obj instanceof ContactsAccount) {
+                ContactsAccount other = (ContactsAccount) obj;
                 return this.name.equalsIgnoreCase(other.name) && this.type.equalsIgnoreCase(other.type);
             } else {
                 return false;
             }
         }
 
-        @NotNull
+        @NonNull
         @Override
         public String toString() {
             return displayName;
@@ -504,23 +475,17 @@ public class ContactListFragment extends FileFragment implements Injectable {
 
         @Override
         public int hashCode() {
-            return Arrays.hashCode(new Object[] {displayName, name, type});
+            return Arrays.hashCode(new Object[]{displayName, name, type});
         }
     }
 
-    private class DownloadFinishReceiver extends BroadcastReceiver {
-
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (FileDownloader.getDownloadFinishMessage().equalsIgnoreCase(intent.getAction())) {
-                String downloadedRemotePath = intent.getStringExtra(FileDownloader.EXTRA_REMOTE_PATH);
-
-                FileDataStorageManager storageManager = new FileDataStorageManager(account,
-                        context.getContentResolver());
-                ocFile = storageManager.getFileByPath(downloadedRemotePath);
-                loadContactsTask.execute();
-            }
+    private Unit onDownloadUpdate(Transfer download) {
+        final Activity activity = getActivity();
+        if (download.getState() == TransferState.COMPLETED && activity != null) {
+            ocFile = download.getFile();
+            loadContactsTask.execute();
         }
+        return Unit.INSTANCE;
     }
 
     public static class VCardComparator implements Comparator<VCard> {
@@ -535,7 +500,7 @@ public class ContactListFragment extends FileFragment implements Injectable {
 
     }
 
-    private AsyncTask loadContactsTask = new AsyncTask() {
+    private AsyncTask<Void, Void, Boolean> loadContactsTask = new AsyncTask<Void, Void, Boolean>() {
 
         @Override
         protected void onPreExecute() {
@@ -543,7 +508,7 @@ public class ContactListFragment extends FileFragment implements Injectable {
         }
 
         @Override
-        protected Object doInBackground(Object[] params) {
+        protected Boolean doInBackground(Void... voids) {
             if (!isCancelled()) {
                 File file = new File(ocFile.getStoragePath());
                 try {
@@ -551,17 +516,17 @@ public class ContactListFragment extends FileFragment implements Injectable {
                     Collections.sort(vCards, new VCardComparator());
                 } catch (IOException e) {
                     Log_OC.e(TAG, "IO Exception: " + file.getAbsolutePath());
-                    return false;
+                    return Boolean.FALSE;
                 }
-                return true;
+                return Boolean.TRUE;
             }
-            return false;
+            return Boolean.FALSE;
         }
 
         @Override
-        protected void onPostExecute(Object o) {
+        protected void onPostExecute(Boolean bool) {
             if (!isCancelled()) {
-                emptyListContainer.setVisibility(View.GONE);
+                binding.loadingListContainer.setVisibility(View.GONE);
                 contactListAdapter.replaceVCards(vCards);
             }
         }
@@ -589,12 +554,15 @@ class ContactListAdapter extends RecyclerView.Adapter<ContactListFragment.Contac
     private Context context;
 
     private UserAccountManager accountManager;
+    private ClientFactory clientFactory;
 
-    ContactListAdapter(UserAccountManager accountManager, Context context, List<VCard> vCards) {
+    ContactListAdapter(UserAccountManager accountManager, ClientFactory clientFactory, Context context,
+                       List<VCard> vCards) {
         this.vCards = vCards;
         this.context = context;
         this.checkedVCards = new HashSet<>();
         this.accountManager = accountManager;
+        this.clientFactory = clientFactory;
     }
 
     ContactListAdapter(UserAccountManager accountManager,
@@ -631,8 +599,7 @@ class ContactListAdapter extends RecyclerView.Adapter<ContactListFragment.Contac
             }
             return intArray;
         } else {
-            intArray = new int[0];
-            return intArray;
+            return new int[0];
         }
     }
 
@@ -661,11 +628,11 @@ class ContactListAdapter extends RecyclerView.Adapter<ContactListFragment.Contac
             } else {
                 try {
                     holder.getBadge().setImageDrawable(
-                            TextDrawable.createNamedAvatar(
-                                    holder.getName().getText().toString(),
-                                    context.getResources().getDimension(R.dimen.list_item_avatar_icon_radius)
-                            )
-                    );
+                        TextDrawable.createNamedAvatar(
+                            holder.getName().getText().toString(),
+                            context.getResources().getDimension(R.dimen.list_item_avatar_icon_radius)
+                                                      )
+                                                      );
                 } catch (Exception e) {
                     holder.getBadge().setImageResource(R.drawable.ic_user);
                 }
@@ -682,7 +649,7 @@ class ContactListAdapter extends RecyclerView.Adapter<ContactListFragment.Contac
         if (data != null && data.length > 0) {
             Bitmap thumbnail = BitmapFactory.decodeByteArray(data, 0, data.length);
             RoundedBitmapDrawable drawable = BitmapUtils.bitmapToCircularBitmapDrawable(context.getResources(),
-                    thumbnail);
+                                                                                        thumbnail);
 
             imageView.setImageDrawable(drawable);
         } else if (url != null) {
@@ -699,6 +666,7 @@ class ContactListAdapter extends RecyclerView.Adapter<ContactListFragment.Contac
                 }
             };
             DisplayUtils.downloadIcon(accountManager,
+                                      clientFactory,
                                       context,
                                       url,
                                       target,
@@ -711,13 +679,11 @@ class ContactListAdapter extends RecyclerView.Adapter<ContactListFragment.Contac
     private void setChecked(boolean checked, CheckedTextView checkedTextView) {
         checkedTextView.setChecked(checked);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-            if (checked) {
-                checkedTextView.getCheckMarkDrawable()
-                        .setColorFilter(ThemeUtils.primaryColor(context), PorterDuff.Mode.SRC_ATOP);
-            } else {
-                checkedTextView.getCheckMarkDrawable().clearColorFilter();
-            }
+        if (checked) {
+            checkedTextView.getCheckMarkDrawable()
+                .setColorFilter(ThemeColorUtils.primaryColor(context), PorterDuff.Mode.SRC_ATOP);
+        } else {
+            checkedTextView.getCheckMarkDrawable().clearColorFilter();
         }
     }
 
@@ -725,19 +691,15 @@ class ContactListAdapter extends RecyclerView.Adapter<ContactListFragment.Contac
         holder.getName().setChecked(!holder.getName().isChecked());
 
         if (holder.getName().isChecked()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-                holder.getName().getCheckMarkDrawable()
-                        .setColorFilter(ThemeUtils.primaryColor(context), PorterDuff.Mode.SRC_ATOP);
-            }
+            holder.getName().getCheckMarkDrawable().setColorFilter(ThemeColorUtils.primaryColor(context),
+                                                                   PorterDuff.Mode.SRC_ATOP);
 
             checkedVCards.add(verifiedPosition);
             if (checkedVCards.size() == SINGLE_SELECTION) {
                 EventBus.getDefault().post(new VCardToggleEvent(true));
             }
         } else {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-                holder.getName().getCheckMarkDrawable().clearColorFilter();
-            }
+            holder.getName().getCheckMarkDrawable().clearColorFilter();
 
             checkedVCards.remove(verifiedPosition);
 

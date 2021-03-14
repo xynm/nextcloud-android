@@ -112,7 +112,6 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:maxLines="1"
-            android:text="@string/auth_username"
             android:textColor="@color/list_item_lastmod_and_filesize_text"
             android:textSize="@dimen/upload_list_item_text_size" />
 
@@ -135,8 +134,6 @@
         android:focusable="false"
         android:focusableInTouchMode="false"
         android:paddingEnd="@dimen/zero"
-        android:paddingLeft="@dimen/standard_half_padding"
-        android:paddingRight="@dimen/zero"
         android:paddingStart="@dimen/standard_half_padding">
 
         <ImageButton

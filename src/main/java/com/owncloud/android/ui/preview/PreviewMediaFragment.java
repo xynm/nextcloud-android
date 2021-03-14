@@ -3,8 +3,10 @@
  *
  *   @author David A. Velasco
  *   @author Chris Narkiewicz
+ *   @author Andy Scherzinger
  *   Copyright (C) 2016 ownCloud Inc.
  *   Copyright (C) 2019 Chris Narkiewicz <hello@ezaquarii.com>
+ *   Copyright (C) 2020 Andy Scherzinger
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License version 2,
@@ -17,7 +19,6 @@
  *
  *   You should have received a copy of the GNU General Public License
  *   along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package com.owncloud.android.ui.preview;
 
@@ -45,27 +46,24 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.View.OnTouchListener;
 import android.view.ViewGroup;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
-import android.widget.RelativeLayout;
-import android.widget.TextView;
-import android.widget.VideoView;
 
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManager;
+import com.nextcloud.client.device.DeviceInfo;
 import com.nextcloud.client.di.Injectable;
 import com.nextcloud.client.media.ErrorFormat;
 import com.nextcloud.client.media.PlayerServiceConnection;
+import com.nextcloud.client.network.ClientFactory;
 import com.owncloud.android.R;
+import com.owncloud.android.databinding.FragmentPreviewMediaBinding;
 import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.files.FileMenuFilter;
 import com.owncloud.android.files.StreamMediaFileOperation;
-import com.owncloud.android.lib.common.OwnCloudAccount;
 import com.owncloud.android.lib.common.OwnCloudClient;
-import com.owncloud.android.lib.common.OwnCloudClientManagerFactory;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.lib.common.utils.Log_OC;
-import com.owncloud.android.media.MediaControlView;
+import com.owncloud.android.ui.activity.DrawerActivity;
 import com.owncloud.android.ui.activity.FileActivity;
 import com.owncloud.android.ui.dialog.ConfirmationDialogFragment;
 import com.owncloud.android.ui.dialog.RemoveFilesDialogFragment;
@@ -76,9 +74,9 @@ import java.lang.ref.WeakReference;
 
 import javax.inject.Inject;
 
-import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.StringRes;
+import androidx.drawerlayout.widget.DrawerLayout;
 
 /**
  * This fragment shows a preview of a downloaded media file (audio or video).
@@ -94,53 +92,45 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
     private static final String TAG = PreviewMediaFragment.class.getSimpleName();
 
     public static final String EXTRA_FILE = "FILE";
-    public static final String EXTRA_ACCOUNT = "ACCOUNT";
+    public static final String EXTRA_USER = "USER";
     private static final String EXTRA_PLAY_POSITION = "PLAY_POSITION";
     private static final String EXTRA_PLAYING = "PLAYING";
     private static final double MIN_DENSITY_RATIO = 24.0;
 
     private static final String FILE = "FILE";
-    private static final String ACCOUNT = "ACCOUNT";
+    private static final String USER = "USER";
     private static final String PLAYBACK_POSITION = "PLAYBACK_POSITION";
     private static final String AUTOPLAY = "AUTOPLAY";
 
-    private Account mAccount;
-    private ImageView mImagePreview;
-    private VideoView mVideoPreview;
-    private int mSavedPlaybackPosition;
+    private User user;
+    private int savedPlaybackPosition;
 
-    private RelativeLayout mMultiView;
-    private RelativeLayout mPreviewContainer;
+    private boolean autoplay;
+    private boolean prepared;
+    private PlayerServiceConnection mediaPlayerServiceConnection;
 
-    private LinearLayout mMultiListContainer;
-    private TextView mMultiListMessage;
-    private TextView mMultiListHeadline;
-    private ImageView mMultiListIcon;
-    private ProgressBar mMultiListProgress;
-
-    private MediaControlView mMediaController;
-    private boolean mAutoplay;
-    private boolean mPrepared;
-    private PlayerServiceConnection mMediaPlayerServiceConnection;
-
-    private Uri mVideoUri;
+    private Uri videoUri;
+    @Inject ClientFactory clientFactory;
     @Inject UserAccountManager accountManager;
+    @Inject DeviceInfo deviceInfo;
+    FragmentPreviewMediaBinding binding;
+    LinearLayout emptyListView;
 
     /**
      * Creates a fragment to preview a file.
-     *
-     * When 'fileToDetail' or 'ocAccount' are null
+     * <p>
+     * When 'fileToDetail' or 'user' are null
      *
      * @param fileToDetail An {@link OCFile} to preview in the fragment
-     * @param ocAccount    An ownCloud account; needed to start downloads
+     * @param user         Currently active user
      */
-    public static PreviewMediaFragment newInstance(OCFile fileToDetail, Account ocAccount, int startPlaybackPosition,
+    public static PreviewMediaFragment newInstance(OCFile fileToDetail, User user, int startPlaybackPosition,
                                                    boolean autoplay) {
         PreviewMediaFragment previewMediaFragment = new PreviewMediaFragment();
 
         Bundle bundle = new Bundle();
         bundle.putParcelable(FILE, fileToDetail);
-        bundle.putParcelable(ACCOUNT, ocAccount);
+        bundle.putParcelable(USER, user);
         bundle.putInt(PLAYBACK_POSITION, startPlaybackPosition);
         bundle.putBoolean(AUTOPLAY, autoplay);
 
@@ -160,9 +150,8 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
      */
     public PreviewMediaFragment() {
         super();
-        mAccount = null;
-        mSavedPlaybackPosition = 0;
-        mAutoplay = true;
+        savedPlaybackPosition = 0;
+        autoplay = true;
     }
 
     @Override
@@ -173,10 +162,10 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
         Bundle bundle = getArguments();
 
         setFile(bundle.getParcelable(FILE));
-        mAccount = bundle.getParcelable(ACCOUNT);
-        mSavedPlaybackPosition = bundle.getInt(PLAYBACK_POSITION);
-        mAutoplay = bundle.getBoolean(AUTOPLAY);
-        mMediaPlayerServiceConnection = new PlayerServiceConnection(getContext());
+        user = bundle.getParcelable(USER);
+        savedPlaybackPosition = bundle.getInt(PLAYBACK_POSITION);
+        autoplay = bundle.getBoolean(AUTOPLAY);
+        mediaPlayerServiceConnection = new PlayerServiceConnection(getContext());
     }
 
     @Override
@@ -184,50 +173,30 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
         super.onCreateView(inflater, container, savedInstanceState);
         Log_OC.v(TAG, "onCreateView");
 
+        binding = FragmentPreviewMediaBinding.inflate(inflater, container, false);
+        View view = binding.getRoot();
 
-        View view = inflater.inflate(R.layout.file_preview, container, false);
+        emptyListView = binding.emptyView.emptyListView;
 
-        mPreviewContainer = view.findViewById(R.id.file_preview_container);
-        mImagePreview = view.findViewById(R.id.image_preview);
-        mVideoPreview = view.findViewById(R.id.video_preview);
-        mVideoPreview.setOnTouchListener(this);
+        binding.videoPreview.setOnTouchListener(this);
 
-        mMediaController = view.findViewById(R.id.media_controller);
-        mMultiView = view.findViewById(R.id.multi_view);
-
-        setupMultiView(view);
-        setMultiListLoadingMessage();
+        setLoadingView();
         return view;
     }
 
-    private void setupMultiView(View view) {
-        mMultiListContainer = view.findViewById(R.id.empty_list_view);
-        mMultiListMessage = view.findViewById(R.id.empty_list_view_text);
-        mMultiListHeadline = view.findViewById(R.id.empty_list_view_headline);
-        mMultiListIcon = view.findViewById(R.id.empty_list_icon);
-        mMultiListProgress = view.findViewById(R.id.empty_list_progress);
+    private void setLoadingView() {
+        binding.progress.setVisibility(View.VISIBLE);
+        binding.emptyView.emptyListView.setVisibility(View.GONE);
     }
 
-    private void setMultiListLoadingMessage() {
-        if (mMultiView != null) {
-            mMultiListHeadline.setText(R.string.file_list_loading);
-            mMultiListMessage.setText("");
-
-            mMultiListIcon.setVisibility(View.GONE);
-            mMultiListProgress.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private void setMessageForMultiList(String headline, @StringRes int message, @DrawableRes int icon) {
-        if (mMultiListContainer != null && mMultiListMessage != null) {
-            mMultiListHeadline.setText(headline);
-            mMultiListMessage.setText(message);
-            mMultiListIcon.setImageResource(icon);
-
-            mMultiListMessage.setVisibility(View.VISIBLE);
-            mMultiListIcon.setVisibility(View.VISIBLE);
-            mMultiListProgress.setVisibility(View.GONE);
-        }
+    private void setVideoErrorMessage(String headline, @StringRes int message) {
+        binding.emptyView.emptyListViewHeadline.setText(headline);
+        binding.emptyView.emptyListViewText.setText(message);
+        binding.emptyView.emptyListIcon.setImageResource(R.drawable.file_movie);
+        binding.emptyView.emptyListViewText.setVisibility(View.VISIBLE);
+        binding.emptyView.emptyListIcon.setVisibility(View.VISIBLE);
+        binding.progress.setVisibility(View.GONE);
+        binding.emptyView.emptyListView.setVisibility(View.VISIBLE);
     }
 
     @Override
@@ -240,28 +209,29 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
             if (file == null) {
                 throw new IllegalStateException("Instanced with a NULL OCFile");
             }
-            if (mAccount == null) {
+            if (user == null) {
                 throw new IllegalStateException("Instanced with a NULL ownCloud Account");
             }
         } else {
-            file = savedInstanceState.getParcelable(PreviewMediaFragment.EXTRA_FILE);
+            file = savedInstanceState.getParcelable(EXTRA_FILE);
             setFile(file);
-            mAccount = savedInstanceState.getParcelable(PreviewMediaFragment.EXTRA_ACCOUNT);
-            mSavedPlaybackPosition = savedInstanceState.getInt(PreviewMediaFragment.EXTRA_PLAY_POSITION);
-            mAutoplay = savedInstanceState.getBoolean(PreviewMediaFragment.EXTRA_PLAYING);
+            user = savedInstanceState.getParcelable(EXTRA_USER);
+            savedPlaybackPosition = savedInstanceState.getInt(EXTRA_PLAY_POSITION);
+            autoplay = savedInstanceState.getBoolean(EXTRA_PLAYING);
         }
 
         if (file != null) {
             if (MimeTypeUtil.isVideo(file)) {
-                mVideoPreview.setVisibility(View.VISIBLE);
-                mImagePreview.setVisibility(View.GONE);
+                binding.videoPreview.setVisibility(View.VISIBLE);
+                binding.imagePreview.setVisibility(View.GONE);
                 prepareVideo();
             } else {
-                mVideoPreview.setVisibility(View.GONE);
-                mImagePreview.setVisibility(View.VISIBLE);
+                binding.videoPreview.setVisibility(View.GONE);
+                binding.imagePreview.setVisibility(View.VISIBLE);
                 extractAndSetCoverArt(file);
             }
         }
+        toggleDrawerLockMode(containerActivity, DrawerLayout.LOCK_MODE_LOCKED_CLOSED);
     }
 
     /**
@@ -277,12 +247,12 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
                 byte[] data = mmr.getEmbeddedPicture();
                 if (data != null) {
                     Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
-                    mImagePreview.setImageBitmap(bitmap); //associated cover art in bitmap
+                    binding.imagePreview.setImageBitmap(bitmap); //associated cover art in bitmap
                 } else {
-                    mImagePreview.setImageResource(R.drawable.logo);
+                    binding.imagePreview.setImageResource(R.drawable.logo);
                 }
             } catch (Throwable t) {
-                mImagePreview.setImageResource(R.drawable.logo);
+                binding.imagePreview.setImageResource(R.drawable.logo);
             }
         }
     }
@@ -291,20 +261,20 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
     public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         Log_OC.v(TAG, "onSaveInstanceState");
-
-        outState.putParcelable(PreviewMediaFragment.EXTRA_FILE, getFile());
-        outState.putParcelable(PreviewMediaFragment.EXTRA_ACCOUNT, mAccount);
+        toggleDrawerLockMode(containerActivity, DrawerLayout.LOCK_MODE_LOCKED_CLOSED);
+        outState.putParcelable(EXTRA_FILE, getFile());
+        outState.putParcelable(EXTRA_USER, user);
 
         if (MimeTypeUtil.isVideo(getFile())) {
-            if (mVideoPreview != null) {
-                mSavedPlaybackPosition = mVideoPreview.getCurrentPosition();
-                mAutoplay = mVideoPreview.isPlaying();
-                outState.putInt(PreviewMediaFragment.EXTRA_PLAY_POSITION, mSavedPlaybackPosition);
-                outState.putBoolean(PreviewMediaFragment.EXTRA_PLAYING, mAutoplay);
+            if (binding.videoPreview != null) {
+                savedPlaybackPosition = binding.videoPreview.getCurrentPosition();
+                autoplay = binding.videoPreview.isPlaying();
+                outState.putInt(EXTRA_PLAY_POSITION, savedPlaybackPosition);
+                outState.putBoolean(EXTRA_PLAYING, autoplay);
             }
-        } else if(mMediaPlayerServiceConnection.isConnected()) {
-            outState.putInt(PreviewMediaFragment.EXTRA_PLAY_POSITION, mMediaPlayerServiceConnection.getCurrentPosition());
-            outState.putBoolean(PreviewMediaFragment.EXTRA_PLAYING, mMediaPlayerServiceConnection.isPlaying());
+        } else if(mediaPlayerServiceConnection.isConnected()) {
+            outState.putInt(EXTRA_PLAY_POSITION, mediaPlayerServiceConnection.getCurrentPosition());
+            outState.putBoolean(EXTRA_PLAYING, mediaPlayerServiceConnection.isPlaying());
         }
     }
 
@@ -314,46 +284,52 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
         Log_OC.v(TAG, "onStart");
         OCFile file = getFile();
         if (file != null) {
+            // bind to any existing player
+            mediaPlayerServiceConnection.bind();
+
             if (MimeTypeUtil.isAudio(file)) {
-                mMediaController.setMediaPlayer(mMediaPlayerServiceConnection);
-                mMediaPlayerServiceConnection.bind();
-                mMediaPlayerServiceConnection.start(mAccount, file, mAutoplay, mSavedPlaybackPosition);
-                mMultiView.setVisibility(View.GONE);
-                mPreviewContainer.setVisibility(View.VISIBLE);
+                binding.mediaController.setMediaPlayer(mediaPlayerServiceConnection);
+                mediaPlayerServiceConnection.start(user, file, autoplay, savedPlaybackPosition);
+                binding.emptyView.emptyListView.setVisibility(View.GONE);
+                binding.progress.setVisibility(View.GONE);
+                binding.filePreviewContainer.setVisibility(View.VISIBLE);
             } else if (MimeTypeUtil.isVideo(file)) {
-                stopAudio();
+                if (mediaPlayerServiceConnection.isConnected()) {
+                    // always stop player
+                    stopAudio();
+                }
                 playVideo();
             }
         }
     }
 
     private void stopAudio() {
-        mMediaPlayerServiceConnection.stop();
+        mediaPlayerServiceConnection.stop();
     }
 
     @Override
-    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+    public void onCreateOptionsMenu(@NonNull Menu menu, @NonNull MenuInflater inflater) {
         super.onCreateOptionsMenu(menu, inflater);
+        menu.removeItem(R.id.action_search);
         inflater.inflate(R.menu.item_file, menu);
     }
 
     @Override
-    public void onPrepareOptionsMenu(Menu menu) {
+    public void onPrepareOptionsMenu(@NonNull Menu menu) {
         super.onPrepareOptionsMenu(menu);
 
         if (containerActivity.getStorageManager() != null) {
-            Account currentAccount = containerActivity.getStorageManager().getAccount();
+            User currentUser = accountManager.getUser();
             FileMenuFilter mf = new FileMenuFilter(
                 getFile(),
-                currentAccount,
                 containerActivity,
                 getActivity(),
-                false
+                false,
+                deviceInfo,
+                currentUser
             );
 
-            mf.filter(menu,
-                      true,
-                      accountManager.isMediaStreamingSupported(currentAccount));
+            mf.filter(menu, true);
         }
 
         // additional restriction for this fragment
@@ -411,31 +387,25 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-            case R.id.action_send_share_file: {
-                sendShareFile();
-                return true;
-            }
-            case R.id.action_open_file_with: {
-                openFile();
-                return true;
-            }
-            case R.id.action_remove_file: {
-                RemoveFilesDialogFragment dialog = RemoveFilesDialogFragment.newInstance(getFile());
-                dialog.show(getFragmentManager(), ConfirmationDialogFragment.FTAG_CONFIRMATION);
-                return true;
-            }
-            case R.id.action_see_details: {
-                seeDetails();
-                return true;
-            }
-            case R.id.action_sync_file: {
-                containerActivity.getFileOperationsHelper().syncFile(getFile());
-                return true;
-            }
-            default:
-                return super.onOptionsItemSelected(item);
+        int itemId = item.getItemId();
+        if (itemId == R.id.action_send_share_file) {
+            sendShareFile();
+            return true;
+        } else if (itemId == R.id.action_open_file_with) {
+            openFile();
+            return true;
+        } else if (itemId == R.id.action_remove_file) {
+            RemoveFilesDialogFragment dialog = RemoveFilesDialogFragment.newInstance(getFile());
+            dialog.show(getFragmentManager(), ConfirmationDialogFragment.FTAG_CONFIRMATION);
+            return true;
+        } else if (itemId == R.id.action_see_details) {
+            seeDetails();
+            return true;
+        } else if (itemId == R.id.action_sync_file) {
+            containerActivity.getFileOperationsHelper().syncFile(getFile());
+            return true;
         }
+        return super.onOptionsItemSelected(item);
     }
 
     /**
@@ -460,25 +430,22 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
     private void prepareVideo() {
         // create helper to get more control on the playback
         VideoHelper videoHelper = new VideoHelper();
-        mVideoPreview.setOnPreparedListener(videoHelper);
-        mVideoPreview.setOnCompletionListener(videoHelper);
-        mVideoPreview.setOnErrorListener(videoHelper);
+        binding.videoPreview.setOnPreparedListener(videoHelper);
+        binding.videoPreview.setOnCompletionListener(videoHelper);
+        binding.videoPreview.setOnErrorListener(videoHelper);
     }
 
     private void playVideo() {
         // create and prepare control panel for the user
-        mMediaController.setMediaPlayer(mVideoPreview);
+        binding.mediaController.setMediaPlayer(binding.videoPreview);
 
         // load the video file in the video player
         // when done, VideoHelper#onPrepared() will be called
         if (getFile().isDown()) {
-            mVideoPreview.setVideoURI(getFile().getStorageUri());
+            binding.videoPreview.setVideoURI(getFile().getStorageUri());
         } else {
             try {
-                OwnCloudAccount ocAccount = new OwnCloudAccount(mAccount, getContext());
-                OwnCloudClient client = OwnCloudClientManagerFactory.getDefaultSingleton().
-                        getClientFor(ocAccount, getContext());
-
+                OwnCloudClient client = clientFactory.create(user);
                 new LoadStreamUrl(this, client).execute(getFile().getLocalId());
             } catch (Exception e) {
                 Log_OC.e(TAG, "Loading stream url not possible: " + e);
@@ -514,13 +481,13 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
             final Context context = previewMediaFragment != null ? previewMediaFragment.getContext() : null;
             if (previewMediaFragment != null && context != null) {
                 if (uri != null) {
-                    previewMediaFragment.mVideoUri = uri;
-                    previewMediaFragment.mVideoPreview.setVideoURI(uri);
+                    previewMediaFragment.videoUri = uri;
+                    previewMediaFragment.binding.videoPreview.setVideoURI(uri);
                 } else {
-                    previewMediaFragment.mMultiView.setVisibility(View.VISIBLE);
-                    previewMediaFragment.setMessageForMultiList(
-                            previewMediaFragment.getString(R.string.stream_not_possible_headline),
-                            R.string.stream_not_possible_message, R.drawable.file_movie);
+                    previewMediaFragment.emptyListView.setVisibility(View.VISIBLE);
+                    previewMediaFragment.setVideoErrorMessage(
+                        previewMediaFragment.getString(R.string.stream_not_possible_headline),
+                        R.string.stream_not_possible_message);
                 }
             } else {
                 Log_OC.e(TAG, "Error streaming file: no previewMediaFragment!");
@@ -540,15 +507,16 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
         @Override
         public void onPrepared(MediaPlayer vp) {
             Log_OC.v(TAG, "onPrepared");
-            mMultiView.setVisibility(View.GONE);
-            mPreviewContainer.setVisibility(View.VISIBLE);
-            mVideoPreview.seekTo(mSavedPlaybackPosition);
-            if (mAutoplay) {
-                mVideoPreview.start();
+            binding.emptyView.emptyListView.setVisibility(View.GONE);
+            binding.progress.setVisibility(View.GONE);
+            binding.filePreviewContainer.setVisibility(View.VISIBLE);
+            binding.videoPreview.seekTo(savedPlaybackPosition);
+            if (autoplay) {
+                binding.videoPreview.start();
             }
-            mMediaController.setEnabled(true);
-            mMediaController.updatePausePlay();
-            mPrepared = true;
+            binding.mediaController.setEnabled(true);
+            binding.mediaController.updatePausePlay();
+            prepared = true;
         }
 
 
@@ -563,9 +531,9 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
         public void onCompletion(MediaPlayer mp) {
             Log_OC.v(TAG, "completed");
             if (mp != null) {
-                mVideoPreview.seekTo(0);
+                binding.videoPreview.seekTo(0);
             } // else : called from onError()
-            mMediaController.updatePausePlay();
+            binding.mediaController.updatePausePlay();
         }
 
         /**
@@ -578,12 +546,13 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
         @Override
         public boolean onError(MediaPlayer mp, int what, int extra) {
             Log_OC.e(TAG, "Error in video playback, what = " + what + ", extra = " + extra);
-            mPreviewContainer.setVisibility(View.GONE);
+            binding.filePreviewContainer.setVisibility(View.GONE);
+            binding.progress.setVisibility(View.GONE);
             final Context context = getActivity();
-            if (mVideoPreview.getWindowToken() != null && context != null) {
+            if (binding.videoPreview.getWindowToken() != null && context != null) {
                 String message = ErrorFormat.toString(context, what, extra);
-                mMultiView.setVisibility(View.VISIBLE);
-                setMessageForMultiList(message, R.string.preview_sorry, R.drawable.file_movie);
+                binding.emptyView.emptyListView.setVisibility(View.VISIBLE);
+                setVideoErrorMessage(message, R.string.preview_sorry);
             }
             return true;
         }
@@ -609,15 +578,23 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
     }
 
     @Override
+    public void onDestroyView() {
+        Log_OC.v(TAG, "onDestroyView");
+        super.onDestroyView();
+        binding = null;
+    }
+
+    @Override
     public void onStop() {
         Log_OC.v(TAG, "onStop");
-        mMediaPlayerServiceConnection.unbind();
+        mediaPlayerServiceConnection.unbind();
+        toggleDrawerLockMode(containerActivity, DrawerLayout.LOCK_MODE_UNLOCKED);
         super.onStop();
     }
 
     @Override
     public boolean onTouch(View v, MotionEvent event) {
-        if (event.getAction() == MotionEvent.ACTION_DOWN && v.equals(mVideoPreview)) {
+        if (event.getAction() == MotionEvent.ACTION_DOWN && v.equals(binding.videoPreview)) {
             // added a margin on the left to avoid interfering with gesture to open navigation drawer
             if (event.getX() / Resources.getSystem().getDisplayMetrics().density > MIN_DENSITY_RATIO) {
                 startFullScreenVideo();
@@ -628,18 +605,18 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
     }
 
     private void startFullScreenVideo() {
-        Intent i = new Intent(getActivity(), PreviewVideoActivity.class);
-        i.putExtra(FileActivity.EXTRA_ACCOUNT, mAccount);
-        i.putExtra(FileActivity.EXTRA_FILE, getFile());
-        i.putExtra(PreviewVideoActivity.EXTRA_AUTOPLAY, mVideoPreview.isPlaying());
-        i.putExtra(PreviewVideoActivity.EXTRA_STREAM_URL, mVideoUri);
-        mVideoPreview.pause();
-        i.putExtra(PreviewVideoActivity.EXTRA_START_POSITION, mVideoPreview.getCurrentPosition());
-        startActivityForResult(i, FileActivity.REQUEST_CODE__LAST_SHARED + 1);
+        Intent intent = new Intent(getActivity(), PreviewVideoActivity.class);
+        intent.putExtra(FileActivity.EXTRA_ACCOUNT, user.toPlatformAccount());
+        intent.putExtra(FileActivity.EXTRA_FILE, getFile());
+        intent.putExtra(PreviewVideoActivity.EXTRA_AUTOPLAY, binding.videoPreview.isPlaying());
+        intent.putExtra(PreviewVideoActivity.EXTRA_STREAM_URL, videoUri);
+        binding.videoPreview.pause();
+        intent.putExtra(PreviewVideoActivity.EXTRA_START_POSITION, binding.videoPreview.getCurrentPosition());
+        startActivityForResult(intent, FileActivity.REQUEST_CODE__LAST_SHARED + 1);
     }
 
     @Override
-    public void onConfigurationChanged(Configuration newConfig) {
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         Log_OC.v(TAG, "onConfigurationChanged " + this);
     }
@@ -649,8 +626,8 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
         Log_OC.v(TAG, "onActivityResult " + this);
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode == Activity.RESULT_OK) {
-            mSavedPlaybackPosition = data.getIntExtra(PreviewVideoActivity.EXTRA_START_POSITION, 0);
-            mAutoplay = data.getBooleanExtra(PreviewVideoActivity.EXTRA_AUTOPLAY, false);
+            savedPlaybackPosition = data.getIntExtra(PreviewVideoActivity.EXTRA_START_POSITION, 0);
+            autoplay = data.getBooleanExtra(PreviewVideoActivity.EXTRA_AUTOPLAY, false);
         }
     }
 
@@ -677,9 +654,9 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
     public void stopPreview(boolean stopAudio) {
         OCFile file = getFile();
         if (MimeTypeUtil.isAudio(file) && stopAudio) {
-            mMediaPlayerServiceConnection.pause();
+            mediaPlayerServiceConnection.pause();
         } else if (MimeTypeUtil.isVideo(file)) {
-            mVideoPreview.stopPlayback();
+            binding.videoPreview.stopPlayback();
         }
     }
 
@@ -694,18 +671,14 @@ public class PreviewMediaFragment extends FileFragment implements OnTouchListene
     }
 
     public int getPosition() {
-        if (mPrepared) {
-            mSavedPlaybackPosition = mVideoPreview.getCurrentPosition();
+        if (prepared) {
+            savedPlaybackPosition = binding.videoPreview.getCurrentPosition();
         }
-        Log_OC.v(TAG, "getting position: " + mSavedPlaybackPosition);
-        return mSavedPlaybackPosition;
+        Log_OC.v(TAG, "getting position: " + savedPlaybackPosition);
+        return savedPlaybackPosition;
     }
 
-    public boolean isPlaying() {
-        if (mPrepared) {
-            mAutoplay = mVideoPreview.isPlaying();
-        }
-        return mAutoplay;
+    private void toggleDrawerLockMode(ContainerActivity containerActivity, int lockMode) {
+        ((DrawerActivity) containerActivity).setDrawerLockMode(lockMode);
     }
-
 }

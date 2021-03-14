@@ -4,7 +4,7 @@
  * @author David A. Velasco
  * @author Chris Narkiewicz
  * Copyright (C) 2016 ownCloud GmbH.
- * Copyright (C) 2019 Chris Narkiewicz <hello@ezaquarii.com>
+ * Copyright (C) 2020 Chris Narkiewicz <hello@ezaquarii.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2,
@@ -25,14 +25,14 @@ import android.accounts.Account;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.net.Uri;
-import android.os.Build;
 import android.text.TextUtils;
 import android.util.Log;
+import android.util.Pair;
 
-import com.evernote.android.job.JobRequest;
-import com.evernote.android.job.util.Device;
-import com.google.gson.reflect.TypeToken;
+import com.nextcloud.client.account.User;
+import com.nextcloud.client.device.BatteryStatus;
 import com.nextcloud.client.device.PowerManagementService;
+import com.nextcloud.client.network.Connectivity;
 import com.nextcloud.client.network.ConnectivityService;
 import com.owncloud.android.datamodel.ArbitraryDataProvider;
 import com.owncloud.android.datamodel.DecryptedFolderMetadata;
@@ -51,11 +51,7 @@ import com.owncloud.android.lib.common.operations.RemoteOperation;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult.ResultCode;
 import com.owncloud.android.lib.common.utils.Log_OC;
-import com.owncloud.android.lib.resources.e2ee.GetMetadataRemoteOperation;
-import com.owncloud.android.lib.resources.e2ee.LockFileRemoteOperation;
-import com.owncloud.android.lib.resources.e2ee.StoreMetadataRemoteOperation;
 import com.owncloud.android.lib.resources.e2ee.UnlockFileRemoteOperation;
-import com.owncloud.android.lib.resources.e2ee.UpdateMetadataRemoteOperation;
 import com.owncloud.android.lib.resources.files.ChunkedFileUploadRemoteOperation;
 import com.owncloud.android.lib.resources.files.ExistenceCheckRemoteOperation;
 import com.owncloud.android.lib.resources.files.ReadFileRemoteOperation;
@@ -84,13 +80,12 @@ import java.io.RandomAccessFile;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import androidx.annotation.RequiresApi;
+import androidx.annotation.CheckResult;
 
 
 /**
@@ -111,19 +106,20 @@ public class UploadFileOperation extends SyncOperation {
     private OCFile mFile;
 
     /**
-     * Original OCFile which is to be uploaded in case file had to be renamed
-     * (if forceOverwrite==false and remote file already exists).
+     * Original OCFile which is to be uploaded in case file had to be renamed (if nameCollisionPolicy==RENAME and remote
+     * file already exists).
      */
     private OCFile mOldFile;
     private String mRemotePath;
     private String mFolderUnlockToken;
     private boolean mRemoteFolderToBeCreated;
-    private boolean mForceOverwrite;
+    private FileUploader.NameCollisionPolicy mNameCollisionPolicy;
     private int mLocalBehaviour;
     private int mCreatedBy;
     private boolean mOnWifiOnly;
     private boolean mWhileChargingOnly;
     private boolean mIgnoringPowerSaveMode;
+    private final boolean mDisableRetries;
 
     private boolean mWasRenamed;
     private long mOCUploadId;
@@ -143,21 +139,15 @@ public class UploadFileOperation extends SyncOperation {
 
     private RequestEntity mEntity;
 
-    final private Account mAccount;
-    final private OCUpload mUpload;
-    final private UploadsStorageManager uploadsStorageManager;
-    final private ConnectivityService connectivityService;
-    final private PowerManagementService powerManagementService;
+    private final User user;
+    private final OCUpload mUpload;
+    private final UploadsStorageManager uploadsStorageManager;
+    private final ConnectivityService connectivityService;
+    private final PowerManagementService powerManagementService;
 
     private boolean encryptedAncestor;
 
     public static OCFile obtainNewOCFileToUpload(String remotePath, String localPath, String mimeType) {
-
-        // MIME type
-        if (TextUtils.isEmpty(mimeType)) {
-            mimeType = MimeTypeUtil.getBestMimeTypeByFilename(localPath);
-        }
-
         OCFile newFile = new OCFile(remotePath);
         newFile.setStoragePath(localPath);
         newFile.setLastSyncDateForProperties(0);
@@ -171,8 +161,12 @@ public class UploadFileOperation extends SyncOperation {
         } // don't worry about not assigning size, the problems with localPath
         // are checked when the UploadFileOperation instance is created
 
-
-        newFile.setMimeType(mimeType);
+        // MIME type
+        if (TextUtils.isEmpty(mimeType)) {
+            newFile.setMimeType(MimeTypeUtil.getBestMimeTypeByFilename(localPath));
+        } else {
+            newFile.setMimeType(mimeType);
+        }
 
         return newFile;
     }
@@ -180,31 +174,43 @@ public class UploadFileOperation extends SyncOperation {
     public UploadFileOperation(UploadsStorageManager uploadsStorageManager,
                                ConnectivityService connectivityService,
                                PowerManagementService powerManagementService,
-                               Account account,
+                               User user,
                                OCFile file,
                                OCUpload upload,
-                               boolean forceOverwrite,
+                               FileUploader.NameCollisionPolicy nameCollisionPolicy,
                                int localBehaviour,
                                Context context,
                                boolean onWifiOnly,
-                               boolean whileChargingOnly
-    ) {
-        if (account == null) {
-            throw new IllegalArgumentException("Illegal NULL account in UploadFileOperation " + "creation");
-        }
+                               boolean whileChargingOnly) {
+        this(uploadsStorageManager, connectivityService, powerManagementService, user, file, upload,
+             nameCollisionPolicy, localBehaviour, context, onWifiOnly, whileChargingOnly, true);
+    }
+
+    public UploadFileOperation(UploadsStorageManager uploadsStorageManager,
+                               ConnectivityService connectivityService,
+                               PowerManagementService powerManagementService,
+                               User user,
+                               OCFile file,
+                               OCUpload upload,
+                               FileUploader.NameCollisionPolicy nameCollisionPolicy,
+                               int localBehaviour,
+                               Context context,
+                               boolean onWifiOnly,
+                               boolean whileChargingOnly,
+                               boolean disableRetries) {
         if (upload == null) {
             throw new IllegalArgumentException("Illegal NULL file in UploadFileOperation creation");
         }
         if (TextUtils.isEmpty(upload.getLocalPath())) {
             throw new IllegalArgumentException(
-                    "Illegal file in UploadFileOperation; storage path invalid: "
-                            + upload.getLocalPath());
+                "Illegal file in UploadFileOperation; storage path invalid: "
+                    + upload.getLocalPath());
         }
 
         this.uploadsStorageManager = uploadsStorageManager;
         this.connectivityService = connectivityService;
         this.powerManagementService = powerManagementService;
-        mAccount = account;
+        this.user = user;
         mUpload = upload;
         if (file == null) {
             mFile = obtainNewOCFileToUpload(
@@ -218,7 +224,7 @@ public class UploadFileOperation extends SyncOperation {
         mOnWifiOnly = onWifiOnly;
         mWhileChargingOnly = whileChargingOnly;
         mRemotePath = upload.getRemotePath();
-        mForceOverwrite = forceOverwrite;
+        mNameCollisionPolicy = nameCollisionPolicy;
         mLocalBehaviour = localBehaviour;
         mOriginalStoragePath = mFile.getStoragePath();
         mContext = context;
@@ -228,6 +234,7 @@ public class UploadFileOperation extends SyncOperation {
         // Ignore power save mode only if user explicitly created this upload
         mIgnoringPowerSaveMode = mCreatedBy == CREATED_BY_USER;
         mFolderUnlockToken = upload.getFolderUnlockToken();
+        mDisableRetries = disableRetries;
     }
 
     public boolean isWifiRequired() {
@@ -241,7 +248,7 @@ public class UploadFileOperation extends SyncOperation {
     public boolean isIgnoringPowerSaveMode() { return mIgnoringPowerSaveMode; }
 
     public Account getAccount() {
-        return mAccount;
+        return user.toPlatformAccount();
     }
 
     public String getFileName() {
@@ -284,8 +291,10 @@ public class UploadFileOperation extends SyncOperation {
         return mLocalBehaviour;
     }
 
-    public void setRemoteFolderToBeCreated() {
+    public UploadFileOperation setRemoteFolderToBeCreated() {
         mRemoteFolderToBeCreated = true;
+
+        return this;
     }
 
     public boolean wasRenamed() {
@@ -347,8 +356,10 @@ public class UploadFileOperation extends SyncOperation {
         }
     }
 
-    public void addRenameUploadListener(OnRenameListener listener) {
+    public UploadFileOperation addRenameUploadListener(OnRenameListener listener) {
         mRenameUploadListener = listener;
+
+        return this;
     }
 
     public Context getContext() {
@@ -415,12 +426,7 @@ public class UploadFileOperation extends SyncOperation {
 
         if (encryptedAncestor) {
             Log_OC.d(TAG, "encrypted upload");
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                return encryptedUpload(client, parent);
-            } else {
-                Log_OC.e(TAG, "Encrypted upload on old Android API");
-                return new RemoteOperationResult(ResultCode.OLD_ANDROID_API);
-            }
+            return encryptedUpload(client, parent);
         } else {
             Log_OC.d(TAG, "normal upload");
             return normalUpload(client);
@@ -428,7 +434,6 @@ public class UploadFileOperation extends SyncOperation {
     }
 
     @SuppressLint("AndroidLintUseSparseArrays") // gson cannot handle sparse arrays easily, therefore use hashmap
-    @RequiresApi(api = Build.VERSION_CODES.KITKAT)
     private RemoteOperationResult encryptedUpload(OwnCloudClient client, OCFile parentFile) {
         RemoteOperationResult result = null;
         File temporalFile = null;
@@ -454,59 +459,31 @@ public class UploadFileOperation extends SyncOperation {
             }
             /***** E2E *****/
 
-            // Lock folder
-            LockFileRemoteOperation lockFileOperation = new LockFileRemoteOperation(parentFile.getLocalId());
-            RemoteOperationResult lockFileOperationResult = lockFileOperation.execute(client);
-
-            if (lockFileOperationResult.isSuccess()) {
-                token = (String) lockFileOperationResult.getData().get(0);
-                // immediately store it
-                mUpload.setFolderUnlockToken(token);
-                uploadsStorageManager.updateUpload(mUpload);
-            } else if (lockFileOperationResult.getHttpCode() == HttpStatus.SC_FORBIDDEN) {
-                throw new UploadException("Forbidden! Please try again later.)");
-            } else {
-                throw new UploadException("Unknown error!");
-            }
+            token = EncryptionUtils.lockFolder(parentFile, client);
+            // immediately store it
+            mUpload.setFolderUnlockToken(token);
+            uploadsStorageManager.updateUpload(mUpload);
 
             // Update metadata
-            GetMetadataRemoteOperation getMetadataOperation = new GetMetadataRemoteOperation(parentFile.getLocalId());
-            RemoteOperationResult getMetadataOperationResult = getMetadataOperation.execute(client);
+            Pair<Boolean, DecryptedFolderMetadata> metadataPair = EncryptionUtils.retrieveMetadata(parentFile,
+                                                                                                   client,
+                                                                                                   privateKey,
+                                                                                                   publicKey);
 
-            DecryptedFolderMetadata metadata;
-
-            if (getMetadataOperationResult.isSuccess()) {
-                metadataExists = true;
-
-                // decrypt metadata
-                String serializedEncryptedMetadata = (String) getMetadataOperationResult.getData().get(0);
-
-
-                EncryptedFolderMetadata encryptedFolderMetadata = EncryptionUtils.deserializeJSON(
-                        serializedEncryptedMetadata, new TypeToken<EncryptedFolderMetadata>() {
-                        });
-
-                metadata = EncryptionUtils.decryptFolderMetaData(encryptedFolderMetadata, privateKey);
-
-            } else if (getMetadataOperationResult.getHttpCode() == HttpStatus.SC_NOT_FOUND) {
-                // new metadata
-                metadata = new DecryptedFolderMetadata();
-                metadata.setMetadata(new DecryptedFolderMetadata.Metadata());
-                metadata.getMetadata().setMetadataKeys(new HashMap<>());
-                String metadataKey = EncryptionUtils.encodeBytesToBase64String(EncryptionUtils.generateKey());
-                String encryptedMetadataKey = EncryptionUtils.encryptStringAsymmetric(metadataKey, publicKey);
-                metadata.getMetadata().getMetadataKeys().put(0, encryptedMetadataKey);
-            } else {
-                // TODO error
-                throw new UploadException("something wrong");
-            }
+            metadataExists = metadataPair.first;
+            DecryptedFolderMetadata metadata = metadataPair.second;
 
             /**** E2E *****/
 
             // check name collision
-            checkNameCollision(client, metadata, parentFile.isEncrypted());
+            RemoteOperationResult collisionResult = checkNameCollision(client, metadata, parentFile.isEncrypted());
+            if (collisionResult != null) {
+                result = collisionResult;
+                return collisionResult;
+            }
 
-            String expectedPath = FileStorageUtils.getDefaultSavePathFor(mAccount.name, mFile);
+            mFile.setDecryptedRemotePath(parentFile.getDecryptedRemotePath() + originalFile.getName());
+            String expectedPath = FileStorageUtils.getDefaultSavePathFor(user.getAccountName(), mFile);
             expectedFile = new File(expectedPath);
 
             result = copyFile(originalFile, expectedPath);
@@ -535,8 +512,6 @@ public class UploadFileOperation extends SyncOperation {
                 encryptedFileName = UUID.randomUUID().toString().replaceAll("-", "");
             }
 
-            mFile.setEncryptedFileName(encryptedFileName);
-
             File encryptedTempFile = File.createTempFile("encFile", encryptedFileName);
             FileOutputStream fileOutputStream = new FileOutputStream(encryptedTempFile);
             fileOutputStream.write(encryptedFile.encryptedBytes);
@@ -551,8 +526,8 @@ public class UploadFileOperation extends SyncOperation {
             } catch (FileNotFoundException e) {
                 // this basically means that the file is on SD card
                 // try to copy file to temporary dir if it doesn't exist
-                String temporalPath = FileStorageUtils.getInternalTemporalPath(mAccount.name, mContext) +
-                        mFile.getRemotePath();
+                String temporalPath = FileStorageUtils.getInternalTemporalPath(user.getAccountName(), mContext) +
+                    mFile.getRemotePath();
                 mFile.setStoragePath(temporalPath);
                 temporalFile = new File(temporalPath);
 
@@ -585,16 +560,26 @@ public class UploadFileOperation extends SyncOperation {
 
             /// perform the upload
             if (size > ChunkedFileUploadRemoteOperation.CHUNK_SIZE_MOBILE) {
-                boolean onWifiConnection = connectivityService.isOnlineWithWifi();
+                boolean onWifiConnection = connectivityService.getConnectivity().isWifi();
 
                 mUploadOperation = new ChunkedFileUploadRemoteOperation(encryptedTempFile.getAbsolutePath(),
                                                                         mFile.getParentRemotePath() + encryptedFileName,
-                                                                        mFile.getMimeType(), mFile.getEtagInConflict(),
-                                                                        timeStamp, onWifiConnection);
+                                                                        mFile.getMimeType(),
+                                                                        mFile.getEtagInConflict(),
+                                                                        timeStamp,
+                                                                        onWifiConnection,
+                                                                        token,
+                                                                        mDisableRetries
+                );
             } else {
                 mUploadOperation = new UploadFileRemoteOperation(encryptedTempFile.getAbsolutePath(),
-                        mFile.getParentRemotePath() + encryptedFileName, mFile.getMimeType(),
-                        mFile.getEtagInConflict(), timeStamp);
+                                                                 mFile.getParentRemotePath() + encryptedFileName,
+                                                                 mFile.getMimeType(),
+                                                                 mFile.getEtagInConflict(),
+                                                                 timeStamp,
+                                                                 token,
+                                                                 mDisableRetries
+                );
             }
 
             for (OnDatatransferProgressListener mDataTransferListener : mDataTransferListeners) {
@@ -614,10 +599,13 @@ public class UploadFileOperation extends SyncOperation {
             }
 
             if (result.isSuccess()) {
-                // upload metadata
+                mFile.setDecryptedRemotePath(parentFile.getDecryptedRemotePath() + originalFile.getName());
+                mFile.setRemotePath(parentFile.getRemotePath() + encryptedFileName);
+
+                // update metadata
                 DecryptedFolderMetadata.DecryptedFile decryptedFile = new DecryptedFolderMetadata.DecryptedFile();
                 DecryptedFolderMetadata.Data data = new DecryptedFolderMetadata.Data();
-                data.setFilename(mFile.getFileName());
+                data.setFilename(mFile.getDecryptedFileName());
                 data.setMimetype(mFile.getMimeType());
                 data.setKey(EncryptionUtils.encodeBytesToBase64String(key));
 
@@ -628,25 +616,21 @@ public class UploadFileOperation extends SyncOperation {
                 metadata.getFiles().put(encryptedFileName, decryptedFile);
 
                 EncryptedFolderMetadata encryptedFolderMetadata = EncryptionUtils.encryptFolderMetadata(metadata,
-                        privateKey);
+                                                                                                        privateKey);
                 String serializedFolderMetadata = EncryptionUtils.serializeJSON(encryptedFolderMetadata);
 
                 // upload metadata
-                RemoteOperationResult uploadMetadataOperationResult;
-                if (metadataExists) {
-                    // update metadata
-                    UpdateMetadataRemoteOperation storeMetadataOperation = new UpdateMetadataRemoteOperation(
-                        parentFile.getLocalId(), serializedFolderMetadata, token);
-                    uploadMetadataOperationResult = storeMetadataOperation.execute(client);
-                } else {
-                    // store metadata
-                    StoreMetadataRemoteOperation storeMetadataOperation = new StoreMetadataRemoteOperation(
-                        parentFile.getLocalId(), serializedFolderMetadata);
-                    uploadMetadataOperationResult = storeMetadataOperation.execute(client);
-                }
+                EncryptionUtils.uploadMetadata(parentFile,
+                                               serializedFolderMetadata,
+                                               token,
+                                               client,
+                                               metadataExists);
 
-                if (!uploadMetadataOperationResult.isSuccess()) {
-                    throw new UploadException();
+                // unlock
+                result = EncryptionUtils.unlockFolder(parentFile, client, token);
+
+                if (result.isSuccess()) {
+                    token = null;
                 }
             }
         } catch (FileNotFoundException e) {
@@ -680,13 +664,19 @@ public class UploadFileOperation extends SyncOperation {
 
         if (result.isSuccess()) {
             handleSuccessfulUpload(temporalFile, expectedFile, originalFile, client);
-            RemoteOperationResult unlockFolderResult = unlockFolder(parentFile, client, token);
+        } else if (result.getCode() == ResultCode.SYNC_CONFLICT) {
+            getStorageManager().saveConflict(mFile, mFile.getEtagInConflict());
+        }
+
+        // unlock must be done always
+        if (token != null) {
+            RemoteOperationResult unlockFolderResult = EncryptionUtils.unlockFolder(parentFile,
+                                                                                    client,
+                                                                                    token);
 
             if (!unlockFolderResult.isSuccess()) {
                 return unlockFolderResult;
             }
-        } else if (result.getCode() == ResultCode.SYNC_CONFLICT) {
-            getStorageManager().saveConflict(mFile, mFile.getEtagInConflict());
         }
 
         // delete temporal file
@@ -697,32 +687,19 @@ public class UploadFileOperation extends SyncOperation {
         return result;
     }
 
-    private RemoteOperationResult unlockFolder(OCFile parentFolder, OwnCloudClient client, String token) {
-        if (token != null) {
-            return new UnlockFileRemoteOperation(parentFolder.getLocalId(), token).execute(client);
-        } else {
-            return new RemoteOperationResult(new Exception("No token available"));
-        }
-    }
-
     private RemoteOperationResult checkConditions(File originalFile) {
         RemoteOperationResult remoteOperationResult = null;
 
-        // check that internet is not behind walled garden
-        if (Device.getNetworkType(mContext).equals(JobRequest.NetworkType.ANY) ||
-                connectivityService.isInternetWalled()) {
-            remoteOperationResult =  new RemoteOperationResult(ResultCode.NO_NETWORK_CONNECTION);
-        }
-
         // check that connectivity conditions are met and delays the upload otherwise
-        if (mOnWifiOnly && !Device.getNetworkType(mContext).equals(JobRequest.NetworkType.UNMETERED)) {
+        Connectivity connectivity = connectivityService.getConnectivity();
+        if (mOnWifiOnly && (!connectivity.isWifi() || connectivity.isMetered())) {
             Log_OC.d(TAG, "Upload delayed until WiFi is available: " + getRemotePath());
             remoteOperationResult = new RemoteOperationResult(ResultCode.DELAYED_FOR_WIFI);
         }
 
         // check if charging conditions are met and delays the upload otherwise
-        if (mWhileChargingOnly && !Device.getBatteryStatus(mContext).isCharging()
-                && Device.getBatteryStatus(mContext).getBatteryPercent() < 1) {
+        final BatteryStatus battery = powerManagementService.getBattery();
+        if (mWhileChargingOnly && !battery.isCharging()) {
             Log_OC.d(TAG, "Upload delayed until the device is charging: " + getRemotePath());
             remoteOperationResult =  new RemoteOperationResult(ResultCode.DELAYED_FOR_CHARGING);
         }
@@ -737,6 +714,11 @@ public class UploadFileOperation extends SyncOperation {
         if (!originalFile.exists()) {
             Log_OC.d(TAG, mOriginalStoragePath + " not exists anymore");
             remoteOperationResult =  new RemoteOperationResult(ResultCode.LOCAL_FILE_NOT_FOUND);
+        }
+
+        // check that internet is not behind walled garden
+        if (!connectivityService.getConnectivity().isConnected() || connectivityService.isInternetWalled()) {
+            remoteOperationResult =  new RemoteOperationResult(ResultCode.NO_NETWORK_CONNECTION);
         }
 
         return remoteOperationResult;
@@ -759,9 +741,13 @@ public class UploadFileOperation extends SyncOperation {
             }
 
             // check name collision
-            checkNameCollision(client, null, false);
+            RemoteOperationResult collisionResult = checkNameCollision(client, null, false);
+            if (collisionResult != null) {
+                result = collisionResult;
+                return collisionResult;
+            }
 
-            String expectedPath = FileStorageUtils.getDefaultSavePathFor(mAccount.name, mFile);
+            String expectedPath = FileStorageUtils.getDefaultSavePathFor(user.getAccountName(), mFile);
             expectedFile = new File(expectedPath);
 
             result = copyFile(originalFile, expectedPath);
@@ -780,8 +766,8 @@ public class UploadFileOperation extends SyncOperation {
             } catch (FileNotFoundException e) {
                 // this basically means that the file is on SD card
                 // try to copy file to temporary dir if it doesn't exist
-                String temporalPath = FileStorageUtils.getInternalTemporalPath(mAccount.name, mContext) +
-                        mFile.getRemotePath();
+                String temporalPath = FileStorageUtils.getInternalTemporalPath(user.getAccountName(), mContext) +
+                    mFile.getRemotePath();
                 mFile.setStoragePath(temporalPath);
                 temporalFile = new File(temporalPath);
 
@@ -814,15 +800,22 @@ public class UploadFileOperation extends SyncOperation {
 
             // perform the upload
             if (size > ChunkedFileUploadRemoteOperation.CHUNK_SIZE_MOBILE) {
-                boolean onWifiConnection = connectivityService.isOnlineWithWifi();
+                boolean onWifiConnection = connectivityService.getConnectivity().isWifi();
 
                 mUploadOperation = new ChunkedFileUploadRemoteOperation(mFile.getStoragePath(),
-                                                                        mFile.getRemotePath(), mFile.getMimeType(),
+                                                                        mFile.getRemotePath(),
+                                                                        mFile.getMimeType(),
                                                                         mFile.getEtagInConflict(),
-                                                                        timeStamp, onWifiConnection);
+                                                                        timeStamp,
+                                                                        onWifiConnection,
+                                                                        mDisableRetries);
             } else {
                 mUploadOperation = new UploadFileRemoteOperation(mFile.getStoragePath(),
-                        mFile.getRemotePath(), mFile.getMimeType(), mFile.getEtagInConflict(), timeStamp);
+                                                                 mFile.getRemotePath(),
+                                                                 mFile.getMimeType(),
+                                                                 mFile.getEtagInConflict(),
+                                                                 timeStamp,
+                                                                 mDisableRetries);
             }
 
             for (OnDatatransferProgressListener mDataTransferListener : mDataTransferListeners) {
@@ -907,7 +900,7 @@ public class UploadFileOperation extends SyncOperation {
     private RemoteOperationResult copyFile(File originalFile, String expectedPath) throws OperationCancelledException,
             IOException {
         if (mLocalBehaviour == FileUploader.LOCAL_BEHAVIOUR_COPY && !mOriginalStoragePath.equals(expectedPath)) {
-            String temporalPath = FileStorageUtils.getInternalTemporalPath(mAccount.name, mContext) +
+            String temporalPath = FileStorageUtils.getInternalTemporalPath(user.getAccountName(), mContext) +
                 mFile.getRemotePath();
             mFile.setStoragePath(temporalPath);
             File temporalFile = new File(temporalPath);
@@ -922,27 +915,46 @@ public class UploadFileOperation extends SyncOperation {
         return new RemoteOperationResult(ResultCode.OK);
     }
 
-    private void checkNameCollision(OwnCloudClient client, DecryptedFolderMetadata metadata, boolean encrypted)
-            throws OperationCancelledException {
-        /// automatic rename of file to upload in case of name collision in server
+    @CheckResult
+    private RemoteOperationResult checkNameCollision(OwnCloudClient client,
+                                                     DecryptedFolderMetadata metadata,
+                                                     boolean encrypted)
+        throws OperationCancelledException {
         Log_OC.d(TAG, "Checking name collision in server");
-        if (!mForceOverwrite) {
-            String remotePath = getAvailableRemotePath(client, mRemotePath, metadata, encrypted);
-            mWasRenamed = !remotePath.equals(mRemotePath);
-            if (mWasRenamed) {
-                createNewOCFile(remotePath);
-                Log_OC.d(TAG, "File renamed as " + remotePath);
+
+        if (existsFile(client, mRemotePath, metadata, encrypted)) {
+            switch (mNameCollisionPolicy) {
+                case CANCEL:
+                    Log_OC.d(TAG, "File exists; canceling");
+                    throw new OperationCancelledException();
+                case RENAME:
+                    mRemotePath = getNewAvailableRemotePath(client, mRemotePath, metadata, encrypted);
+                    mWasRenamed = true;
+                    createNewOCFile(mRemotePath);
+                    Log_OC.d(TAG, "File renamed as " + mRemotePath);
+                    if (mRenameUploadListener != null) {
+                        mRenameUploadListener.onRenameUpload();
+                    }
+                    break;
+                case OVERWRITE:
+                    Log_OC.d(TAG, "Overwriting file");
+                    break;
+                case ASK_USER:
+                    Log_OC.d(TAG, "Name collision; asking the user what to do");
+                    return new RemoteOperationResult(ResultCode.SYNC_CONFLICT);
             }
-            mRemotePath = remotePath;
-            mRenameUploadListener.onRenameUpload();
         }
 
         if (mCancellationRequested.get()) {
             throw new OperationCancelledException();
         }
+
+        return null;
     }
 
-    private void handleSuccessfulUpload(File temporalFile, File expectedFile, File originalFile,
+    private void handleSuccessfulUpload(File temporalFile,
+                                        File expectedFile,
+                                        File originalFile,
                                         OwnCloudClient client) {
         switch (mLocalBehaviour) {
             case FileUploader.LOCAL_BEHAVIOUR_FORGET:
@@ -953,6 +965,7 @@ public class UploadFileOperation extends SyncOperation {
 
             case FileUploader.LOCAL_BEHAVIOUR_DELETE:
                 originalFile.delete();
+                mFile.setStoragePath("");
                 getStorageManager().deleteFileInMediaScan(originalFile.getAbsolutePath());
                 saveUploadedFile(client);
                 break;
@@ -964,14 +977,22 @@ public class UploadFileOperation extends SyncOperation {
                     } catch (IOException e) {
                         Log_OC.e(TAG, e.getMessage());
                     }
+                } else if (originalFile != null) {
+                    try {
+                        copy(originalFile, expectedFile);
+                    } catch (IOException e) {
+                        Log_OC.e(TAG, e.getMessage());
+                    }
                 }
                 mFile.setStoragePath(expectedFile.getAbsolutePath());
                 saveUploadedFile(client);
-                FileDataStorageManager.triggerMediaScan(expectedFile.getAbsolutePath());
+                if (MimeTypeUtil.isMedia(mFile.getMimeType())) {
+                    FileDataStorageManager.triggerMediaScan(expectedFile.getAbsolutePath());
+                }
                 break;
 
             case FileUploader.LOCAL_BEHAVIOUR_MOVE:
-                String expectedPath = FileStorageUtils.getDefaultSavePathFor(mAccount.name, mFile);
+                String expectedPath = FileStorageUtils.getDefaultSavePathFor(user.getAccountName(), mFile);
                 File newFile = new File(expectedPath);
 
                 try {
@@ -982,7 +1003,9 @@ public class UploadFileOperation extends SyncOperation {
                 getStorageManager().deleteFileInMediaScan(originalFile.getAbsolutePath());
                 mFile.setStoragePath(newFile.getAbsolutePath());
                 saveUploadedFile(client);
-                FileDataStorageManager.triggerMediaScan(newFile.getAbsolutePath());
+                if (MimeTypeUtil.isMedia(mFile.getMimeType())) {
+                    FileDataStorageManager.triggerMediaScan(newFile.getAbsolutePath());
+                }
                 break;
         }
     }
@@ -1002,7 +1025,7 @@ public class UploadFileOperation extends SyncOperation {
         RemoteOperation operation = new ExistenceCheckRemoteOperation(pathToGrant, false);
         RemoteOperationResult result = operation.execute(client);
         if (!result.isSuccess() && result.getCode() == ResultCode.FILE_NOT_FOUND && mRemoteFolderToBeCreated) {
-            SyncOperation syncOp = new CreateFolderOperation(pathToGrant, true);
+            SyncOperation syncOp = new CreateFolderOperation(pathToGrant, user, getContext());
             result = syncOp.execute(client, getStorageManager());
         }
         if (result.isSuccess()) {
@@ -1039,8 +1062,8 @@ public class UploadFileOperation extends SyncOperation {
 
 
     /**
-     * Create a new OCFile mFile with new remote path. This is required if forceOverwrite==false.
-     * New file is stored as mFile, original as mOldFile.
+     * Create a new OCFile mFile with new remote path. This is required if nameCollisionPolicy==RENAME. New file is
+     * stored as mFile, original as mOldFile.
      *
      * @param newRemotePath new remote path
      */
@@ -1064,45 +1087,36 @@ public class UploadFileOperation extends SyncOperation {
     }
 
     /**
-     * Checks if remotePath does not exist in the server and returns it, or adds
-     * a suffix to it in order to avoid the server file is overwritten.
+     * Returns a new and available (does not exists on the server) remotePath.
+     * This adds an incremental suffix.
      *
      * @param client     OwnCloud client
      * @param remotePath remote path of the file
      * @param metadata   metadata of encrypted folder
      * @return new remote path
      */
-    private String getAvailableRemotePath(OwnCloudClient client, String remotePath, DecryptedFolderMetadata metadata,
-                                          boolean encrypted) {
-        boolean check = existsFile(client, remotePath, metadata, encrypted);
-        if (!check) {
-            return remotePath;
-        }
-
-        int pos = remotePath.lastIndexOf('.');
+    private String getNewAvailableRemotePath(OwnCloudClient client, String remotePath, DecryptedFolderMetadata metadata,
+                                             boolean encrypted) {
+        int extPos = remotePath.lastIndexOf('.');
         String suffix;
         String extension = "";
         String remotePathWithoutExtension = "";
-        if (pos >= 0) {
-            extension = remotePath.substring(pos + 1);
-            remotePathWithoutExtension = remotePath.substring(0, pos);
+        if (extPos >= 0) {
+            extension = remotePath.substring(extPos + 1);
+            remotePathWithoutExtension = remotePath.substring(0, extPos);
         }
+
         int count = 2;
+        boolean exists;
+        String newPath;
         do {
             suffix = " (" + count + ")";
-            if (pos >= 0) {
-                check = existsFile(client, remotePathWithoutExtension + suffix + "." + extension, metadata, encrypted);
-            } else {
-                check = existsFile(client, remotePath + suffix, metadata, encrypted);
-            }
+            newPath = extPos >= 0 ? remotePathWithoutExtension + suffix + "." + extension : remotePath + suffix;
+            exists = existsFile(client, newPath, metadata, encrypted);
             count++;
-        } while (check);
+        } while (exists);
 
-        if (pos >= 0) {
-            return remotePathWithoutExtension + suffix + "." + extension;
-        } else {
-            return remotePath + suffix;
-        }
+        return newPath;
     }
 
     private boolean existsFile(OwnCloudClient client, String remotePath, DecryptedFolderMetadata metadata,
@@ -1129,7 +1143,7 @@ public class UploadFileOperation extends SyncOperation {
      * is in progress it is cancelled, if upload preparation is being performed
      * upload will not take place.
      */
-    public void cancel() {
+    public void cancel(ResultCode cancellationReason) {
         if (mUploadOperation == null) {
             if (mUploadStarted.get()) {
                 Log_OC.d(TAG, "Cancelling upload during upload preparations.");
@@ -1139,7 +1153,7 @@ public class UploadFileOperation extends SyncOperation {
             }
         } else {
             Log_OC.d(TAG, "Cancelling upload during actual upload operation.");
-            mUploadOperation.cancel();
+            mUploadOperation.cancel(cancellationReason);
         }
     }
 
@@ -1286,6 +1300,10 @@ public class UploadFileOperation extends SyncOperation {
         if (file.fileExists()) {
             file = getStorageManager().getFileById(file.getFileId());
         }
+        if (file == null) {
+            // this can happen e.g. when the file gets deleted during upload
+            return;
+        }
         long syncDate = System.currentTimeMillis();
         file.setLastSyncDateForData(syncDate);
 
@@ -1324,11 +1342,13 @@ public class UploadFileOperation extends SyncOperation {
         getStorageManager().saveFile(file);
         getStorageManager().saveConflict(file, null);
 
-        FileDataStorageManager.triggerMediaScan(file.getStoragePath());
+        if (MimeTypeUtil.isMedia(file.getMimeType())) {
+            FileDataStorageManager.triggerMediaScan(file.getStoragePath(), file);
+        }
 
         // generate new Thumbnail
         final ThumbnailsCacheManager.ThumbnailGenerationTask task =
-                new ThumbnailsCacheManager.ThumbnailGenerationTask(getStorageManager(), mAccount);
+                new ThumbnailsCacheManager.ThumbnailGenerationTask(getStorageManager(), user.toPlatformAccount());
         task.execute(new ThumbnailsCacheManager.ThumbnailGenerationTaskObject(file, file.getRemoteId()));
     }
 

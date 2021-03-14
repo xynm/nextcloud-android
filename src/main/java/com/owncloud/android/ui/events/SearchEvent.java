@@ -23,27 +23,36 @@ import com.owncloud.android.lib.resources.files.SearchRemoteOperation;
 
 import org.parceler.Parcel;
 
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
-
 /**
  * Search event
  */
 @Parcel
-@Getter
-@Setter
-@AllArgsConstructor
-@NoArgsConstructor
 public class SearchEvent {
     public String searchQuery;
     public SearchRemoteOperation.SearchType searchType;
-    public UnsetType unsetType;
 
-    public enum UnsetType {
-        NO_UNSET,
-        UNSET_DRAWER,
-        UNSET_BOTTOM_NAV_BAR
+    public SearchEvent(String searchQuery, SearchRemoteOperation.SearchType searchType) {
+        this.searchQuery = searchQuery;
+        this.searchType = searchType;
+    }
+
+    public SearchEvent() {
+        // empty constructor to create empty object
+    }
+
+    public String getSearchQuery() {
+        return this.searchQuery;
+    }
+
+    public SearchRemoteOperation.SearchType getSearchType() {
+        return this.searchType;
+    }
+
+    public void setSearchQuery(String searchQuery) {
+        this.searchQuery = searchQuery;
+    }
+
+    public void setSearchType(SearchRemoteOperation.SearchType searchType) {
+        this.searchType = searchType;
     }
 }

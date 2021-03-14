@@ -21,12 +21,12 @@
 
 package com.nextcloud.client.preferences;
 
-import android.accounts.Account;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
 
 import com.nextcloud.client.account.CurrentAccountProvider;
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.account.UserAccountManagerImpl;
 import com.owncloud.android.datamodel.ArbitraryDataProvider;
 import com.owncloud.android.datamodel.FileDataStorageManager;
@@ -39,13 +39,14 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
 import static com.owncloud.android.ui.fragment.OCFileListFragment.FOLDER_LAYOUT_LIST;
 
 /**
  * Implementation of application-wide preferences using {@link SharedPreferences}.
  *
- * Users should not use this class directly. Please use {@link AppPreferences} interafce
+ * Users should not use this class directly. Please use {@link AppPreferences} interface
  * instead.
  */
 public final class AppPreferencesImpl implements AppPreferences {
@@ -56,7 +57,9 @@ public final class AppPreferencesImpl implements AppPreferences {
      */
     public static final String AUTO_PREF__LAST_SEEN_VERSION_CODE = "lastSeenVersionCode";
     public static final String STORAGE_PATH = "storage_path";
-    public static final float DEFAULT_GRID_COLUMN = 4.0f;
+    public static final String STORAGE_PATH_VALID = "storage_path_valid";
+    public static final String PREF__DARK_THEME = "dark_theme_mode";
+    public static final float DEFAULT_GRID_COLUMN = 3f;
 
     private static final String AUTO_PREF__LAST_UPLOAD_PATH = "last_upload_path";
     private static final String AUTO_PREF__UPLOAD_FROM_LOCAL_LAST_PATH = "upload_from_local_last_path";
@@ -78,7 +81,6 @@ public final class AppPreferencesImpl implements AppPreferences {
     private static final String PREF__AUTO_UPLOAD_INIT = "autoUploadInit";
     private static final String PREF__FOLDER_SORT_ORDER = "folder_sort_order";
     private static final String PREF__FOLDER_LAYOUT = "folder_layout";
-    static final String PREF__DARK_THEME_ENABLED = "dark_theme_enabled";
 
     private static final String PREF__LOCK_TIMESTAMP = "lock_timestamp";
     private static final String PREF__SHOW_MEDIA_SCAN_NOTIFICATIONS = "show_media_scan_notifications";
@@ -87,6 +89,7 @@ public final class AppPreferencesImpl implements AppPreferences {
     private static final String PREF__MIGRATED_USER_ID = "migrated_user_id";
     private static final String PREF__PHOTO_SEARCH_TIMESTAMP = "photo_search_timestamp";
     private static final String PREF__POWER_CHECK_DISABLED = "power_check_disabled";
+    private static final String PREF__PIN_BRUTE_FORCE_COUNT = "pin_brute_force_count";
 
     private final Context context;
     private final SharedPreferences preferences;
@@ -120,10 +123,10 @@ public final class AppPreferencesImpl implements AppPreferences {
 
         @Override
         public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
-            if(PREF__DARK_THEME_ENABLED.equals(key)) {
-                boolean enabled = preferences.isDarkThemeEnabled();
+            if (PREF__DARK_THEME.equals(key)) {
+                DarkMode mode = preferences.getDarkThemeMode();
                 for(Listener l : listeners) {
-                    l.onDarkThemeEnabledChanged(enabled);
+                    l.onDarkThemeModeChanged(mode);
                 }
             }
         }
@@ -282,34 +285,34 @@ public final class AppPreferencesImpl implements AppPreferences {
     @Override
     public String getFolderLayout(OCFile folder) {
         return getFolderPreference(context,
-                                   currentAccountProvider.getCurrentAccount(),
+                                   currentAccountProvider.getUser(),
                                    PREF__FOLDER_LAYOUT,
                                    folder,
                                    FOLDER_LAYOUT_LIST);
     }
 
     @Override
-    public void setFolderLayout(OCFile folder, String layout_name) {
+    public void setFolderLayout(@Nullable OCFile folder, String layoutName) {
         setFolderPreference(context,
-                            currentAccountProvider.getCurrentAccount(),
+                            currentAccountProvider.getUser(),
                             PREF__FOLDER_LAYOUT,
                             folder,
-                            layout_name);
+                            layoutName);
     }
 
     @Override
     public FileSortOrder getSortOrderByFolder(OCFile folder) {
         return FileSortOrder.sortOrders.get(getFolderPreference(context,
-                                                                currentAccountProvider.getCurrentAccount(),
+                                                                currentAccountProvider.getUser(),
                                                                 PREF__FOLDER_SORT_ORDER,
                                                                 folder,
                                                                 FileSortOrder.sort_a_to_z.name));
     }
 
     @Override
-    public void setSortOrder(OCFile folder, FileSortOrder sortOrder) {
+    public void setSortOrder(@Nullable OCFile folder, FileSortOrder sortOrder) {
         setFolderPreference(context,
-                            currentAccountProvider.getCurrentAccount(),
+                            currentAccountProvider.getUser(),
                             PREF__FOLDER_SORT_ORDER,
                             folder,
                             sortOrder.name);
@@ -322,28 +325,23 @@ public final class AppPreferencesImpl implements AppPreferences {
 
     @Override
     public FileSortOrder getSortOrderByType(FileSortOrder.Type type, FileSortOrder defaultOrder) {
-        Account account = currentAccountProvider.getCurrentAccount();
-        if (account == null) {
+        User user = currentAccountProvider.getUser();
+        if (user.isAnonymous()) {
             return defaultOrder;
         }
 
         ArbitraryDataProvider dataProvider = new ArbitraryDataProvider(context.getContentResolver());
 
-        String value = dataProvider.getValue(account.name, PREF__FOLDER_SORT_ORDER + "_" + type);
+        String value = dataProvider.getValue(user.getAccountName(), PREF__FOLDER_SORT_ORDER + "_" + type);
 
         return value.isEmpty() ? defaultOrder : FileSortOrder.sortOrders.get(value);
     }
 
     @Override
     public void setSortOrder(FileSortOrder.Type type, FileSortOrder sortOrder) {
-        Account account = currentAccountProvider.getCurrentAccount();
-
-        if (account == null) {
-            throw new IllegalArgumentException("Account may not be null!");
-        }
-
+        User user = currentAccountProvider.getUser();
         ArbitraryDataProvider dataProvider = new ArbitraryDataProvider(context.getContentResolver());
-        dataProvider.storeOrUpdateKeyValue(account.name, PREF__FOLDER_SORT_ORDER + "_" + type, sortOrder.name);
+        dataProvider.storeOrUpdateKeyValue(user.getAccountName(), PREF__FOLDER_SORT_ORDER + "_" + type, sortOrder.name);
     }
 
     @Override
@@ -412,13 +410,18 @@ public final class AppPreferencesImpl implements AppPreferences {
     }
 
     @Override
-    public void setDarkThemeEnabled(boolean enabled) {
-        preferences.edit().putBoolean(PREF__DARK_THEME_ENABLED, enabled).apply();
+    public void setDarkThemeMode(DarkMode mode) {
+        preferences.edit().putString(PREF__DARK_THEME, mode.name()).apply();
     }
 
     @Override
-    public boolean isDarkThemeEnabled() {
-        return preferences.getBoolean(PREF__DARK_THEME_ENABLED, false);
+    public DarkMode getDarkThemeMode() {
+        try {
+            return DarkMode.valueOf(preferences.getString(PREF__DARK_THEME, DarkMode.SYSTEM.name()));
+        } catch (ClassCastException e) {
+            preferences.edit().putString(PREF__DARK_THEME, DarkMode.SYSTEM.name()).apply();
+            return DarkMode.SYSTEM;
+        }
     }
 
     @Override
@@ -526,6 +529,17 @@ public final class AppPreferencesImpl implements AppPreferences {
         preferences.edit().putString(STORAGE_PATH, path).commit();  // commit synchronously
     }
 
+    @SuppressLint("ApplySharedPref")
+    @Override
+    public void setStoragePathValid() {
+        preferences.edit().putBoolean(STORAGE_PATH_VALID, true).commit();
+    }
+
+    @Override
+    public boolean isStoragePathValid() {
+        return preferences.getBoolean(STORAGE_PATH_VALID, false);
+    }
+
     /**
      * Removes keys migration key from shared preferences.
      */
@@ -576,22 +590,22 @@ public final class AppPreferencesImpl implements AppPreferences {
      * @return Preference value
      */
     private static String getFolderPreference(final Context context,
-                                              final Account account,
+                                              final User user,
                                               final String preferenceName,
                                               final OCFile folder,
                                               final String defaultValue) {
-        if (account == null) {
+        if (user.isAnonymous()) {
             return defaultValue;
         }
 
         ArbitraryDataProvider dataProvider = new ArbitraryDataProvider(context.getContentResolver());
-        FileDataStorageManager storageManager = new FileDataStorageManager(account, context.getContentResolver());
+        FileDataStorageManager storageManager = new FileDataStorageManager(user.toPlatformAccount(), context.getContentResolver());
 
-        String value = dataProvider.getValue(account.name, getKeyFromFolder(preferenceName, folder));
+        String value = dataProvider.getValue(user.getAccountName(), getKeyFromFolder(preferenceName, folder));
         OCFile prefFolder = folder;
         while (prefFolder != null && value.isEmpty()) {
             prefFolder = storageManager.getFileById(prefFolder.getParentId());
-            value = dataProvider.getValue(account.name, getKeyFromFolder(preferenceName, prefFolder));
+            value = dataProvider.getValue(user.getAccountName(), getKeyFromFolder(preferenceName, prefFolder));
         }
         return value.isEmpty() ? defaultValue : value;
     }
@@ -605,19 +619,15 @@ public final class AppPreferencesImpl implements AppPreferences {
      * @param value Preference value to set.
      */
     private static void setFolderPreference(final Context context,
-                                            final Account account,
+                                            final User user,
                                             final String preferenceName,
-                                            final OCFile folder,
+                                            @Nullable final OCFile folder,
                                             final String value) {
-        if (account == null) {
-            throw new IllegalArgumentException("Account may not be null!");
-        }
-
         ArbitraryDataProvider dataProvider = new ArbitraryDataProvider(context.getContentResolver());
-        dataProvider.storeOrUpdateKeyValue(account.name, getKeyFromFolder(preferenceName, folder), value);
+        dataProvider.storeOrUpdateKeyValue(user.getAccountName(), getKeyFromFolder(preferenceName, folder), value);
     }
 
-    private static String getKeyFromFolder(String preferenceName, OCFile folder) {
+    private static String getKeyFromFolder(String preferenceName, @Nullable OCFile folder) {
         final String folderIdString = String.valueOf(folder != null ? folder.getFileId() :
             FileDataStorageManager.ROOT_PARENT_ID);
 
@@ -632,5 +642,26 @@ public final class AppPreferencesImpl implements AppPreferences {
     @Override
     public void setPowerCheckDisabled(boolean value) {
         preferences.edit().putBoolean(PREF__POWER_CHECK_DISABLED, value).apply();
+    }
+
+    public void increasePinWrongAttempts() {
+        int count = preferences.getInt(PREF__PIN_BRUTE_FORCE_COUNT, 0);
+        preferences.edit().putInt(PREF__PIN_BRUTE_FORCE_COUNT, count + 1).apply();
+    }
+
+    @Override
+    public void resetPinWrongAttempts() {
+        preferences.edit().putInt(PREF__PIN_BRUTE_FORCE_COUNT, 0).apply();
+    }
+
+    public int pinBruteForceDelay() {
+        int count = preferences.getInt(PREF__PIN_BRUTE_FORCE_COUNT, 0);
+
+        return computeBruteForceDelay(count);
+    }
+
+    @VisibleForTesting
+    public int computeBruteForceDelay(int count) {
+        return (int) Math.min(count / 3d, 10);
     }
 }

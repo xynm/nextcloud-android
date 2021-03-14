@@ -24,6 +24,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.view.Window;
 import android.view.WindowManager;
 
@@ -65,7 +66,7 @@ public final class PassCodeManager {
         this.preferences = preferences;
     }
 
-    public void onActivityCreated(Activity activity) {
+    private void setSecureFlag(Activity activity) {
         Window window = activity.getWindow();
         if (window != null) {
             if (isPassCodeEnabled() || deviceCredentialsAreEnabled(activity)) {
@@ -79,6 +80,8 @@ public final class PassCodeManager {
     public boolean onActivityStarted(Activity activity) {
         boolean askedForPin = false;
         Long timestamp = AppPreferencesImpl.fromContext(activity).getLockTimestamp();
+
+        setSecureFlag(activity);
 
         if (!exemptOfPasscodeActivities.contains(activity.getClass()) && passCodeShouldBeRequested(timestamp)) {
             askedForPin = true;
@@ -102,7 +105,7 @@ public final class PassCodeManager {
             activity.startActivityForResult(i, PASSCODE_ACTIVITY);
         } else {
             if (!askedForPin && preferences.getLockTimestamp() != 0) {
-                preferences.setLockTimestamp(System.currentTimeMillis());
+                preferences.setLockTimestamp(SystemClock.elapsedRealtime());
             }
         }
 
@@ -124,7 +127,7 @@ public final class PassCodeManager {
     }
 
     private boolean passCodeShouldBeRequested(Long timestamp) {
-        return (System.currentTimeMillis() - timestamp) > PASS_CODE_TIMEOUT &&
+        return Math.abs(SystemClock.elapsedRealtime() - timestamp) > PASS_CODE_TIMEOUT &&
             visibleActivitiesCounter <= 0 && isPassCodeEnabled();
     }
 
@@ -133,7 +136,7 @@ public final class PassCodeManager {
     }
 
     private boolean deviceCredentialsShouldBeRequested(Long timestamp, Activity activity) {
-        return (System.currentTimeMillis() - timestamp) > PASS_CODE_TIMEOUT && visibleActivitiesCounter <= 0 &&
+        return Math.abs(SystemClock.elapsedRealtime() - timestamp) > PASS_CODE_TIMEOUT && visibleActivitiesCounter <= 0 &&
             deviceCredentialsAreEnabled(activity);
     }
 

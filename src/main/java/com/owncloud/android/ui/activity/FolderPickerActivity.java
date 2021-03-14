@@ -25,10 +25,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.res.ColorStateList;
 import android.content.res.Resources.NotFoundException;
-import android.graphics.PorterDuff;
-import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Parcelable;
 import android.util.Log;
@@ -39,10 +36,10 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.View.OnClickListener;
 
-import com.nextcloud.client.di.Injectable;
-import com.nextcloud.client.preferences.AppPreferences;
 import com.google.android.material.button.MaterialButton;
+import com.nextcloud.client.di.Injectable;
 import com.owncloud.android.R;
+import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.lib.common.operations.RemoteOperation;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
@@ -58,19 +55,27 @@ import com.owncloud.android.ui.fragment.OCFileListFragment;
 import com.owncloud.android.utils.DataHolderUtil;
 import com.owncloud.android.utils.DisplayUtils;
 import com.owncloud.android.utils.ErrorMessageAdapter;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.FileSortOrder;
+import com.owncloud.android.utils.theme.ThemeButtonUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
+import com.owncloud.android.utils.theme.ThemeToolbarUtils;
+import com.owncloud.android.utils.theme.ThemeUtils;
 
+import java.io.File;
 import java.util.ArrayList;
 
 import javax.inject.Inject;
 
 import androidx.appcompat.app.ActionBar;
 import androidx.fragment.app.Fragment;
-import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentTransaction;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 public class FolderPickerActivity extends FileActivity implements FileFragment.ContainerActivity,
-    OnClickListener, OnEnforceableRefreshListener, Injectable {
+    OnClickListener,
+    OnEnforceableRefreshListener,
+    Injectable,
+    SortingOrderDialogFragment.OnSortingOrderListener {
 
     public static final String EXTRA_FOLDER = FolderPickerActivity.class.getCanonicalName() + ".EXTRA_FOLDER";
     public static final String EXTRA_FILES = FolderPickerActivity.class.getCanonicalName() + ".EXTRA_FILES";
@@ -94,7 +99,7 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
     protected MaterialButton mCancelBtn;
     protected MaterialButton mChooseBtn;
     private String caption;
-    @Inject AppPreferences preferences;
+    @Inject LocalBroadcastManager localBroadcastManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -112,6 +117,8 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
 
         // Action bar setup
         setupToolbar();
+        findViewById(R.id.sort_list_button_group).setVisibility(View.VISIBLE);
+        findViewById(R.id.switch_grid_view_button).setVisibility(View.GONE);
 
         if (getIntent().getStringExtra(EXTRA_ACTION) != null) {
             switch (getIntent().getStringExtra(EXTRA_ACTION)) {
@@ -141,12 +148,8 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
             createFragments();
         }
 
-        if (getSupportActionBar() != null) {
-            getSupportActionBar().setDisplayShowTitleEnabled(true);
-            ThemeUtils.setColoredTitle(getSupportActionBar(), caption, this);
-        }
+        updateActionBarTitleAndHomeButtonByString(caption);
 
-        setIndeterminate(mSyncInProgress);
         // always AFTER setContentView(...) ; to work around bug in its implementation
 
         // sets message for empty list of folders
@@ -195,8 +198,7 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
     }
 
     /**
-     * Show a text message on screen view for notifying user if content is
-     * loading or folder is empty
+     * Show a text message on screen view for notifying user if content is loading or folder is empty
      */
     private void setBackgroundText() {
         OCFileListFragment listFragment = getListOfFilesFragment();
@@ -249,11 +251,16 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
         mSyncInProgress = true;
 
         // perform folder synchronization
-        RemoteOperation refreshFolderOperation = new RefreshFolderOperation(folder, currentSyncTime, false,
-            ignoreETag, getStorageManager(), getAccount(), getApplicationContext());
+        RemoteOperation refreshFolderOperation = new RefreshFolderOperation(folder,
+                                                                            currentSyncTime,
+                                                                            false,
+                                                                            ignoreETag,
+                                                                            getStorageManager(),
+                                                                            getAccount(),
+                                                                            getApplicationContext());
 
         refreshFolderOperation.execute(getAccount(), this, null, null);
-        setIndeterminate(true);
+        getListOfFilesFragment().setLoading(true);
         setBackgroundText();
     }
 
@@ -261,6 +268,8 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
     protected void onResume() {
         super.onResume();
         Log_OC.e(TAG, "onResume() start");
+        getListOfFilesFragment().setLoading(mSyncInProgress);
+
 
         // refresh list of files
         refreshListOfFilesFragment(false);
@@ -272,7 +281,7 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
         syncIntentFilter.addAction(RefreshFolderOperation.EVENT_SINGLE_FOLDER_CONTENTS_SYNCED);
         syncIntentFilter.addAction(RefreshFolderOperation.EVENT_SINGLE_FOLDER_SHARES_SYNCED);
         mSyncBroadcastReceiver = new SyncBroadcastReceiver();
-        registerReceiver(mSyncBroadcastReceiver, syncIntentFilter);
+        localBroadcastManager.registerReceiver(mSyncBroadcastReceiver, syncIntentFilter);
 
         Log_OC.d(TAG, "onResume() end");
     }
@@ -281,8 +290,7 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
     protected void onPause() {
         Log_OC.e(TAG, "onPause() start");
         if (mSyncBroadcastReceiver != null) {
-            unregisterReceiver(mSyncBroadcastReceiver);
-            //LocalBroadcastManager.getInstance(this).unregisterReceiver(mSyncBroadcastReceiver);
+            localBroadcastManager.unregisterReceiver(mSyncBroadcastReceiver);
             mSyncBroadcastReceiver = null;
         }
 
@@ -313,17 +321,6 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
                 }
                 break;
             }
-            case R.id.action_sort: {
-                FragmentManager fm = getSupportFragmentManager();
-                FragmentTransaction ft = fm.beginTransaction();
-                ft.addToBackStack(null);
-
-                SortingOrderDialogFragment mSortingOrderDialogFragment = SortingOrderDialogFragment.newInstance(
-                    preferences.getSortOrderByFolder(getListOfFilesFragment().getCurrentFile()));
-                mSortingOrderDialogFragment.show(ft, SortingOrderDialogFragment.SORTING_ORDER_FRAGMENT);
-
-                break;
-            }
             default:
                 retval = super.onOptionsItemSelected(item);
                 break;
@@ -333,16 +330,22 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
     }
 
     protected OCFile getCurrentFolder() {
-        OCFile file = getFile();
-        if (file != null) {
-            if (file.isFolder()) {
-                return file;
-            } else if (getStorageManager() != null) {
-                String parentPath = file.getRemotePath().substring(0, file.getRemotePath().lastIndexOf(file.getFileName()));
-                return getStorageManager().getFileByPath(parentPath);
+        OCFile currentFile = getFile();
+        OCFile finalFolder = null;
+        FileDataStorageManager storageManager = getStorageManager();
+
+        // If the file is null, take the root folder to avoid any error in functions depending on this one
+        if (currentFile != null) {
+            if (currentFile.isFolder()) {
+                finalFolder = currentFile;
+            } else if (currentFile.getRemotePath() != null) {
+                String parentPath = new File(currentFile.getRemotePath()).getParent();
+                finalFolder = storageManager.getFileByPath(parentPath);
             }
+        } else {
+            finalFolder = storageManager.getFileByPath(OCFile.ROOT_PATH);
         }
-        return null;
+        return finalFolder;
     }
 
     public void refreshListOfFilesFragment(boolean fromSearch) {
@@ -386,11 +389,9 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
             actionBar.setDisplayHomeAsUpEnabled(!atRoot);
             actionBar.setHomeButtonEnabled(!atRoot);
 
-            Drawable backArrow = getResources().getDrawable(R.drawable.ic_arrow_back);
+            ThemeToolbarUtils.tintBackButton(actionBar, this);
 
-            actionBar.setHomeAsUpIndicator(ThemeUtils.tintDrawable(backArrow, ThemeUtils.fontColor(this)));
-
-            ThemeUtils.setColoredTitle(getSupportActionBar(), atRoot ? caption : currentDir.getFileName(), this);
+            ThemeToolbarUtils.setColoredTitle(getSupportActionBar(), atRoot ? caption : currentDir.getFileName(), this);
         }
     }
 
@@ -402,13 +403,16 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
         mChooseBtn = findViewById(R.id.folder_picker_btn_choose);
 
         if (mChooseBtn != null) {
-            mChooseBtn.setBackgroundTintMode(PorterDuff.Mode.SRC_ATOP);
-            mChooseBtn.setBackgroundTintList(ColorStateList.valueOf(ThemeUtils.primaryColor(this, true)));
+            ThemeButtonUtils.colorPrimaryButton(mChooseBtn, this);
             mChooseBtn.setOnClickListener(this);
         }
 
         if (mCancelBtn != null) {
-            mCancelBtn.setTextColor(ThemeUtils.primaryColor(this, true));
+            if (this instanceof FilePickerActivity) {
+                ThemeButtonUtils.colorPrimaryButton(mCancelBtn, this);
+            } else {
+                mCancelBtn.setTextColor(ThemeColorUtils.primaryColor(this, true));
+            }
             mCancelBtn.setOnClickListener(this);
         }
     }
@@ -422,7 +426,7 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
             ArrayList<Parcelable> targetFiles = i.getParcelableArrayListExtra(FolderPickerActivity.EXTRA_FILES);
 
             Intent data = new Intent();
-            data.putExtra(EXTRA_FOLDER, getCurrentFolder());
+            data.putExtra(EXTRA_FOLDER, getListOfFilesFragment().getCurrentFile());
             data.putParcelableArrayListExtra(EXTRA_FILES, targetFiles);
             setResult(RESULT_OK, data);
 
@@ -443,8 +447,7 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
 
 
     /**
-     * Updates the view associated to the activity after the finish of an operation trying
-     * to create a new folder.
+     * Updates the view associated to the activity after the finish of an operation trying to create a new folder.
      *
      * @param operation Creation operation performed.
      * @param result    Result of the creation.
@@ -495,8 +498,9 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
 
                         if (currentDir == null) {
                             // current folder was removed from the server
-                            DisplayUtils.showSnackMessage(getActivity(), R.string.sync_current_folder_was_removed,
-                                getCurrentFolder().getFileName());
+                            DisplayUtils.showSnackMessage(getActivity(),
+                                                          R.string.sync_current_folder_was_removed,
+                                                          getCurrentFolder().getFileName());
                             browseToRoot();
                         } else {
                             if (currentFile == null && !getFile().isFolder()) {
@@ -530,11 +534,10 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
 
                         }
                     }
-                    removeStickyBroadcast(intent);
                     DataHolderUtil.getInstance().delete(intent.getStringExtra(FileSyncAdapter.EXTRA_RESULT));
                     Log_OC.d(TAG, "Setting progress visibility to " + mSyncInProgress);
 
-                    setIndeterminate(mSyncInProgress);
+                    getListOfFilesFragment().setLoading(mSyncInProgress);
 
                     setBackgroundText();
                 }
@@ -542,7 +545,6 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
             } catch (RuntimeException e) {
                 // avoid app crashes after changing the serial id of RemoteOperationResult
                 // in owncloud library with broadcast notifications pending to process
-                removeStickyBroadcast(intent);
                 DataHolderUtil.getInstance().delete(intent.getStringExtra(FileSyncAdapter.EXTRA_RESULT));
             }
         }
@@ -588,5 +590,10 @@ public class FolderPickerActivity extends FileActivity implements FileFragment.C
 
     public boolean isDoNotEnterEncryptedFolder() {
         return mDoNotEnterEncryptedFolder;
+    }
+
+    @Override
+    public void onSortingOrderChosen(FileSortOrder selection) {
+        getListOfFilesFragment().sortFiles(selection);
     }
 }

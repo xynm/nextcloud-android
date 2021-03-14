@@ -38,7 +38,8 @@ import com.owncloud.android.ui.interfaces.LocalFileListFragmentInterface;
 import com.owncloud.android.utils.DisplayUtils;
 import com.owncloud.android.utils.FileSortOrder;
 import com.owncloud.android.utils.MimeTypeUtil;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
+import com.owncloud.android.utils.theme.ThemeDrawableUtils;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -152,15 +153,16 @@ public class LocalFileListAdapter extends RecyclerView.Adapter<RecyclerView.View
                 if (isCheckedFile(file)) {
                     gridViewHolder.itemLayout.setBackgroundColor(mContext.getResources()
                             .getColor(R.color.selected_item_background));
-                    gridViewHolder.checkbox.setImageDrawable(ThemeUtils.tintDrawable(R.drawable.ic_checkbox_marked,
-                            ThemeUtils.primaryColor(mContext)));
+                    gridViewHolder.checkbox.setImageDrawable(
+                        ThemeDrawableUtils.tintDrawable(R.drawable.ic_checkbox_marked,
+                                                        ThemeColorUtils.primaryColor(mContext)));
                 } else {
                     gridViewHolder.itemLayout.setBackgroundColor(mContext.getResources().getColor(R.color.bg_default));
                     gridViewHolder.checkbox.setImageResource(R.drawable.ic_checkbox_blank_outline);
                 }
 
                 gridViewHolder.thumbnail.setTag(file.hashCode());
-                setThumbnail(file, gridViewHolder.thumbnail);
+                setThumbnail(file, gridViewHolder.thumbnail, mContext);
 
                 if (file.isDirectory()) {
                     gridViewHolder.checkbox.setVisibility(View.GONE);
@@ -203,16 +205,17 @@ public class LocalFileListAdapter extends RecyclerView.Adapter<RecyclerView.View
         }
     }
 
-    private void setThumbnail(File file, ImageView thumbnailView) {
+    public static void setThumbnail(File file, ImageView thumbnailView, Context context) {
         if (file.isDirectory()) {
-            thumbnailView.setImageDrawable(MimeTypeUtil.getDefaultFolderIcon(mContext));
+            thumbnailView.setImageDrawable(MimeTypeUtil.getDefaultFolderIcon(context));
         } else {
             thumbnailView.setImageResource(R.drawable.file);
 
             /* Cancellation needs do be checked and done before changing the drawable in fileIcon, or
              * {@link ThumbnailsCacheManager#cancelPotentialThumbnailWork} will NEVER cancel any task.
              */
-            boolean allowedToCreateNewThumbnail = ThumbnailsCacheManager.cancelPotentialThumbnailWork(file, thumbnailView);
+            boolean allowedToCreateNewThumbnail = ThumbnailsCacheManager.cancelPotentialThumbnailWork(file,
+                                                                                                      thumbnailView);
 
 
             // get Thumbnail if file is image
@@ -236,9 +239,9 @@ public class LocalFileListAdapter extends RecyclerView.Adapter<RecyclerView.View
                         }
                         final ThumbnailsCacheManager.AsyncThumbnailDrawable asyncDrawable =
                                 new ThumbnailsCacheManager.AsyncThumbnailDrawable(
-                                        mContext.getResources(),
-                                        thumbnail,
-                                        task
+                                    context.getResources(),
+                                    thumbnail,
+                                    task
                                 );
                         thumbnailView.setImageDrawable(asyncDrawable);
                         task.execute(new ThumbnailsCacheManager.ThumbnailGenerationTaskObject(file, null));
@@ -247,7 +250,7 @@ public class LocalFileListAdapter extends RecyclerView.Adapter<RecyclerView.View
                     } // else, already being generated, don't restart it
                 }
             } else {
-                thumbnailView.setImageDrawable(MimeTypeUtil.getFileTypeIcon(null, file.getName(), mContext));
+                thumbnailView.setImageDrawable(MimeTypeUtil.getFileTypeIcon(null, file.getName(), context));
             }
         }
     }
@@ -364,9 +367,9 @@ public class LocalFileListAdapter extends RecyclerView.Adapter<RecyclerView.View
             mFiles = mFilesAll;
         } else {
             List<File> result = new ArrayList<>();
-            text = text.toLowerCase(Locale.getDefault());
+            String filterText = text.toLowerCase(Locale.getDefault());
             for (File file : mFilesAll) {
-                if (file.getName().toLowerCase(Locale.getDefault()).contains(text)) {
+                if (file.getName().toLowerCase(Locale.getDefault()).contains(filterText)) {
                     result.add(file);
                 }
             }
@@ -443,6 +446,7 @@ public class LocalFileListAdapter extends RecyclerView.Adapter<RecyclerView.View
             fileSeparator = itemView.findViewById(R.id.file_separator);
             lastModification = itemView.findViewById(R.id.last_mod);
 
+            itemView.findViewById(R.id.sharedAvatars).setVisibility(View.GONE);
             itemView.findViewById(R.id.overflow_menu).setVisibility(View.GONE);
         }
     }

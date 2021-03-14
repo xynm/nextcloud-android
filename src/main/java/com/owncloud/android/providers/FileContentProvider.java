@@ -49,6 +49,7 @@ import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.datamodel.SyncedFolder;
 import com.owncloud.android.db.ProviderMeta;
 import com.owncloud.android.db.ProviderMeta.ProviderTableMeta;
+import com.owncloud.android.files.services.FileUploader;
 import com.owncloud.android.lib.common.accounts.AccountUtils;
 import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.lib.resources.shares.ShareType;
@@ -90,7 +91,6 @@ public class FileContentProvider extends ContentProvider {
     private static final String TEXT = " TEXT, ";
     private static final String ALTER_TABLE = "ALTER TABLE ";
     private static final String ADD_COLUMN = " ADD COLUMN ";
-    private static final String REMOVE_COLUMN = " REMOVE COLUMN ";
     private static final String UPGRADE_VERSION_MSG = "OUT of the ADD in onUpgrade; oldVersion == %d, newVersion == %d";
     private static final int SINGLE_PATH_SEGMENT = 1;
     public static final int ARBITRARY_DATA_TABLE_INTRODUCTION_VERSION = 20;
@@ -265,14 +265,16 @@ public class FileContentProvider extends ContentProvider {
         switch (mUriMatcher.match(uri)) {
             case ROOT_DIRECTORY:
             case SINGLE_FILE:
-                String remotePath = values.getAsString(ProviderTableMeta.FILE_PATH);
-                String accountName = values.getAsString(ProviderTableMeta.FILE_ACCOUNT_OWNER);
                 String[] projection = new String[]{
                     ProviderTableMeta._ID, ProviderTableMeta.FILE_PATH,
                     ProviderTableMeta.FILE_ACCOUNT_OWNER
                 };
                 String where = ProviderTableMeta.FILE_PATH + "=? AND " + ProviderTableMeta.FILE_ACCOUNT_OWNER + "=?";
-                String[] whereArgs = new String[]{remotePath, accountName};
+
+                String remotePath = values.getAsString(ProviderTableMeta.FILE_PATH);
+                String accountName = values.getAsString(ProviderTableMeta.FILE_ACCOUNT_OWNER);
+                String[] whereArgs = {remotePath, accountName};
+
                 Cursor doubleCheck = query(db, uri, projection, where, whereArgs, null);
                 // ugly patch; serious refactorization is needed to reduce work in
                 // FileDataStorageManager and bring it to FileContentProvider
@@ -299,9 +301,9 @@ public class FileContentProvider extends ContentProvider {
 
             case SHARES:
                 Uri insertedShareUri;
-                long rowId = db.insert(ProviderTableMeta.OCSHARES_TABLE_NAME, null, values);
-                if (rowId > 0) {
-                    insertedShareUri = ContentUris.withAppendedId(ProviderTableMeta.CONTENT_URI_SHARE, rowId);
+                long idShares = db.insert(ProviderTableMeta.OCSHARES_TABLE_NAME, null, values);
+                if (idShares > 0) {
+                    insertedShareUri = ContentUris.withAppendedId(ProviderTableMeta.CONTENT_URI_SHARE, idShares);
                 } else {
                     throw new SQLException(ERROR + uri);
 
@@ -312,9 +314,9 @@ public class FileContentProvider extends ContentProvider {
 
             case CAPABILITIES:
                 Uri insertedCapUri;
-                long id = db.insert(ProviderTableMeta.CAPABILITIES_TABLE_NAME, null, values);
-                if (id > 0) {
-                    insertedCapUri = ContentUris.withAppendedId(ProviderTableMeta.CONTENT_URI_CAPABILITIES, id);
+                long idCapabilities = db.insert(ProviderTableMeta.CAPABILITIES_TABLE_NAME, null, values);
+                if (idCapabilities > 0) {
+                    insertedCapUri = ContentUris.withAppendedId(ProviderTableMeta.CONTENT_URI_CAPABILITIES, idCapabilities);
                 } else {
                     throw new SQLException(ERROR + uri);
                 }
@@ -402,6 +404,7 @@ public class FileContentProvider extends ContentProvider {
             case EMAIL:
             case FEDERATED:
             case ROOM:
+            case CIRCLE:
                 fileValues.put(ProviderTableMeta.FILE_SHARED_WITH_SHAREE, 1);
                 break;
 
@@ -662,16 +665,16 @@ public class FileContentProvider extends ContentProvider {
         ContentProviderResult[] results = new ContentProviderResult[operations.size()];
         int i = 0;
 
-        SQLiteDatabase db = mDbHelper.getWritableDatabase();
-        db.beginTransaction();  // it's supposed that transactions can be nested
+        SQLiteDatabase database = mDbHelper.getWritableDatabase();
+        database.beginTransaction();  // it's supposed that transactions can be nested
         try {
             for (ContentProviderOperation operation : operations) {
                 results[i] = operation.apply(this, results, i);
                 i++;
             }
-            db.setTransactionSuccessful();
+            database.setTransactionSuccessful();
         } finally {
-            db.endTransaction();
+            database.endTransaction();
         }
         Log_OC.d("FileContentProvider", "applied batch in provider " + this);
         return results;
@@ -691,6 +694,7 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.FILE_NAME + TEXT
                        + ProviderTableMeta.FILE_ENCRYPTED_NAME + TEXT
                        + ProviderTableMeta.FILE_PATH + TEXT
+                       + ProviderTableMeta.FILE_PATH_DECRYPTED + TEXT
                        + ProviderTableMeta.FILE_PARENT + INTEGER
                        + ProviderTableMeta.FILE_CREATION + INTEGER
                        + ProviderTableMeta.FILE_MODIFIED + INTEGER
@@ -704,7 +708,6 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.FILE_ETAG + TEXT
                        + ProviderTableMeta.FILE_ETAG_ON_SERVER + TEXT
                        + ProviderTableMeta.FILE_SHARED_VIA_LINK + INTEGER
-                       + ProviderTableMeta.FILE_PUBLIC_LINK + TEXT
                        + ProviderTableMeta.FILE_PERMISSIONS + " TEXT null,"
                        + ProviderTableMeta.FILE_REMOTE_ID + " TEXT null,"
                        + ProviderTableMeta.FILE_UPDATE_THUMBNAIL + INTEGER //boolean
@@ -719,7 +722,8 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.FILE_OWNER_ID + TEXT
                        + ProviderTableMeta.FILE_OWNER_DISPLAY_NAME + TEXT
                        + ProviderTableMeta.FILE_NOTE + TEXT
-                       + ProviderTableMeta.FILE_SHAREES + " TEXT);"
+                       + ProviderTableMeta.FILE_SHAREES + TEXT
+                       + ProviderTableMeta.FILE_RICH_WORKSPACE + " TEXT);"
         );
     }
 
@@ -742,7 +746,9 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.OCSHARES_ACCOUNT_OWNER + TEXT
                        + ProviderTableMeta.OCSHARES_IS_PASSWORD_PROTECTED + INTEGER
                        + ProviderTableMeta.OCSHARES_NOTE + TEXT
-                       + ProviderTableMeta.OCSHARES_HIDE_DOWNLOAD + " INTEGER );");
+                       + ProviderTableMeta.OCSHARES_HIDE_DOWNLOAD + INTEGER
+                       + ProviderTableMeta.OCSHARES_SHARE_LINK + TEXT
+                       + ProviderTableMeta.OCSHARES_SHARE_LABEL + " TEXT );");
     }
 
     private void createCapabilitiesTable(SQLiteDatabase db) {
@@ -771,7 +777,6 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.CAPABILITIES_FILES_BIGFILECHUNKING + INTEGER   // boolean
                        + ProviderTableMeta.CAPABILITIES_FILES_UNDELETE + INTEGER  // boolean
                        + ProviderTableMeta.CAPABILITIES_FILES_VERSIONING + INTEGER   // boolean
-                       + ProviderTableMeta.CAPABILITIES_FILES_DROP + INTEGER  // boolean
                        + ProviderTableMeta.CAPABILITIES_EXTERNAL_LINKS + INTEGER  // boolean
                        + ProviderTableMeta.CAPABILITIES_SERVER_NAME + TEXT
                        + ProviderTableMeta.CAPABILITIES_SERVER_COLOR + TEXT
@@ -789,7 +794,11 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.CAPABILITIES_RICHDOCUMENT_TEMPLATES + INTEGER
                        + ProviderTableMeta.CAPABILITIES_RICHDOCUMENT_OPTIONAL_MIMETYPE_LIST + TEXT
                        + ProviderTableMeta.CAPABILITIES_SHARING_PUBLIC_ASK_FOR_OPTIONAL_PASSWORD + INTEGER
-                       + ProviderTableMeta.CAPABILITIES_RICHDOCUMENT_PRODUCT_NAME + " TEXT );");
+                       + ProviderTableMeta.CAPABILITIES_RICHDOCUMENT_PRODUCT_NAME + TEXT
+                       + ProviderTableMeta.CAPABILITIES_DIRECT_EDITING_ETAG + TEXT
+                       + ProviderTableMeta.CAPABILITIES_USER_STATUS + INTEGER
+                       + ProviderTableMeta.CAPABILITIES_USER_STATUS_SUPPORTS_EMOJI + INTEGER
+                       + ProviderTableMeta.CAPABILITIES_ETAG + " TEXT );");
     }
 
     private void createUploadsTable(SQLiteDatabase db) {
@@ -802,7 +811,7 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.UPLOADS_STATUS + INTEGER               // UploadStatus
                        + ProviderTableMeta.UPLOADS_LOCAL_BEHAVIOUR + INTEGER      // Upload LocalBehaviour
                        + ProviderTableMeta.UPLOADS_UPLOAD_TIME + INTEGER
-                       + ProviderTableMeta.UPLOADS_FORCE_OVERWRITE + INTEGER  // boolean
+                       + ProviderTableMeta.UPLOADS_NAME_COLLISION_POLICY + INTEGER  // boolean
                        + ProviderTableMeta.UPLOADS_IS_CREATE_REMOTE_FOLDER + INTEGER  // boolean
                        + ProviderTableMeta.UPLOADS_UPLOAD_END_TIMESTAMP + INTEGER
                        + ProviderTableMeta.UPLOADS_LAST_RESULT + INTEGER     // Upload LastResult
@@ -828,12 +837,15 @@ public class FileContentProvider extends ContentProvider {
                        + ProviderTableMeta.SYNCED_FOLDER_REMOTE_PATH + " TEXT, "          // remote path
                        + ProviderTableMeta.SYNCED_FOLDER_WIFI_ONLY + " INTEGER, "         // wifi_only
                        + ProviderTableMeta.SYNCED_FOLDER_CHARGING_ONLY + " INTEGER, "     // charging only
+                       + ProviderTableMeta.SYNCED_FOLDER_EXISTING + " INTEGER, "          // existing
                        + ProviderTableMeta.SYNCED_FOLDER_ENABLED + " INTEGER, "           // enabled
-                       + ProviderTableMeta.SYNCED_FOLDER_ENABLED_TIMESTAMP_MS + " INTEGER, "           // enable date
+                       + ProviderTableMeta.SYNCED_FOLDER_ENABLED_TIMESTAMP_MS + " INTEGER, " // enable date
                        + ProviderTableMeta.SYNCED_FOLDER_SUBFOLDER_BY_DATE + " INTEGER, " // subfolder by date
                        + ProviderTableMeta.SYNCED_FOLDER_ACCOUNT + "  TEXT, "             // account
                        + ProviderTableMeta.SYNCED_FOLDER_UPLOAD_ACTION + " INTEGER, "     // upload action
-                       + ProviderTableMeta.SYNCED_FOLDER_TYPE + " INTEGER );"             // type
+                       + ProviderTableMeta.SYNCED_FOLDER_NAME_COLLISION_POLICY + " INTEGER, " // name collision policy
+                       + ProviderTableMeta.SYNCED_FOLDER_TYPE + " INTEGER, "              // type
+                       + ProviderTableMeta.SYNCED_FOLDER_HIDDEN + " INTEGER );"           // hidden
         );
     }
 
@@ -1136,10 +1148,6 @@ public class FileContentProvider extends ContentProvider {
                     db.execSQL(ALTER_TABLE + ProviderTableMeta.FILE_TABLE_NAME +
                                    ADD_COLUMN + ProviderTableMeta.FILE_SHARED_VIA_LINK + " INTEGER " +
                                    " DEFAULT 0");
-
-                    db.execSQL(ALTER_TABLE + ProviderTableMeta.FILE_TABLE_NAME +
-                                   ADD_COLUMN + ProviderTableMeta.FILE_PUBLIC_LINK + " TEXT " +
-                                   " DEFAULT NULL");
 
                     // Create table OCShares
                     createOCSharesTable(db);
@@ -2045,17 +2053,257 @@ public class FileContentProvider extends ContentProvider {
             if (!upgraded) {
                 Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
             }
-        }
 
-        @Override
-        public void onDowngrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-            if (oldVersion == 25 && newVersion == 24) {
-                db.execSQL(ALTER_TABLE + ProviderTableMeta.FILE_TABLE_NAME +
-                               REMOVE_COLUMN + ProviderTableMeta.FILE_IS_ENCRYPTED);
-                db.execSQL(ALTER_TABLE + ProviderTableMeta.FILE_TABLE_NAME +
-                               REMOVE_COLUMN + ProviderTableMeta.FILE_ENCRYPTED_NAME);
-                db.execSQL(ALTER_TABLE + ProviderTableMeta.CAPABILITIES_TABLE_NAME +
-                               REMOVE_COLUMN + ProviderTableMeta.CAPABILITIES_END_TO_END_ENCRYPTION);
+            if (oldVersion < 51 && newVersion >= 51) {
+                Log_OC.i(SQL, "Entering in the #51 add show/hide to folderSync table");
+                db.beginTransaction();
+                try {
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.SYNCED_FOLDERS_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.SYNCED_FOLDER_HIDDEN + " INTEGER ");
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 52 && newVersion >= 52) {
+                Log_OC.i(SQL, "Entering in the #52 add etag for directEditing to capability");
+                db.beginTransaction();
+                try {
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.CAPABILITIES_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.CAPABILITIES_DIRECT_EDITING_ETAG + " TEXT ");
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 53 && newVersion >= 53) {
+                Log_OC.i(SQL, "Entering in the #53 add rich workspace to file table");
+                db.beginTransaction();
+                try {
+                    if (!checkIfColumnExists(db, ProviderTableMeta.FILE_TABLE_NAME,
+                                             ProviderTableMeta.FILE_RICH_WORKSPACE)) {
+                        db.execSQL(ALTER_TABLE + ProviderTableMeta.FILE_TABLE_NAME +
+                                       ADD_COLUMN + ProviderTableMeta.FILE_RICH_WORKSPACE + " TEXT ");
+                    }
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 54 && newVersion >= 54) {
+                Log_OC.i(SQL, "Entering in the #54 add synced.existing," +
+                    " rename uploads.force_overwrite to uploads.name_collision_policy");
+                db.beginTransaction();
+                try {
+                    // Add synced.existing
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.SYNCED_FOLDERS_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.SYNCED_FOLDER_EXISTING + " INTEGER "); // boolean
+
+
+                    // Rename uploads.force_overwrite to uploads.name_collision_policy
+                    String tmpTableName = ProviderTableMeta.UPLOADS_TABLE_NAME + "_old";
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.UPLOADS_TABLE_NAME + " RENAME TO " + tmpTableName);
+                    createUploadsTable(db);
+                    db.execSQL("INSERT INTO " + ProviderTableMeta.UPLOADS_TABLE_NAME + " (" +
+                                   ProviderTableMeta._ID + ", " +
+                                   ProviderTableMeta.UPLOADS_LOCAL_PATH + ", " +
+                                   ProviderTableMeta.UPLOADS_REMOTE_PATH + ", " +
+                                   ProviderTableMeta.UPLOADS_ACCOUNT_NAME + ", " +
+                                   ProviderTableMeta.UPLOADS_FILE_SIZE + ", " +
+                                   ProviderTableMeta.UPLOADS_STATUS + ", " +
+                                   ProviderTableMeta.UPLOADS_LOCAL_BEHAVIOUR + ", " +
+                                   ProviderTableMeta.UPLOADS_UPLOAD_TIME + ", " +
+                                   ProviderTableMeta.UPLOADS_NAME_COLLISION_POLICY + ", " +
+                                   ProviderTableMeta.UPLOADS_IS_CREATE_REMOTE_FOLDER + ", " +
+                                   ProviderTableMeta.UPLOADS_UPLOAD_END_TIMESTAMP + ", " +
+                                   ProviderTableMeta.UPLOADS_LAST_RESULT + ", " +
+                                   ProviderTableMeta.UPLOADS_IS_WHILE_CHARGING_ONLY + ", " +
+                                   ProviderTableMeta.UPLOADS_IS_WIFI_ONLY + ", " +
+                                   ProviderTableMeta.UPLOADS_CREATED_BY + ", " +
+                                   ProviderTableMeta.UPLOADS_FOLDER_UNLOCK_TOKEN +
+                                   ") " +
+                                   " SELECT " +
+                                   ProviderTableMeta._ID + ", " +
+                                   ProviderTableMeta.UPLOADS_LOCAL_PATH + ", " +
+                                   ProviderTableMeta.UPLOADS_REMOTE_PATH + ", " +
+                                   ProviderTableMeta.UPLOADS_ACCOUNT_NAME + ", " +
+                                   ProviderTableMeta.UPLOADS_FILE_SIZE + ", " +
+                                   ProviderTableMeta.UPLOADS_STATUS + ", " +
+                                   ProviderTableMeta.UPLOADS_LOCAL_BEHAVIOUR + ", " +
+                                   ProviderTableMeta.UPLOADS_UPLOAD_TIME + ", " +
+                                   "force_overwrite" + ", " + // See FileUploader.NameCollisionPolicy
+                                   ProviderTableMeta.UPLOADS_IS_CREATE_REMOTE_FOLDER + ", " +
+                                   ProviderTableMeta.UPLOADS_UPLOAD_END_TIMESTAMP + ", " +
+                                   ProviderTableMeta.UPLOADS_LAST_RESULT + ", " +
+                                   ProviderTableMeta.UPLOADS_IS_WHILE_CHARGING_ONLY + ", " +
+                                   ProviderTableMeta.UPLOADS_IS_WIFI_ONLY + ", " +
+                                   ProviderTableMeta.UPLOADS_CREATED_BY + ", " +
+                                   ProviderTableMeta.UPLOADS_FOLDER_UNLOCK_TOKEN +
+                                   " FROM " + tmpTableName);
+                    db.execSQL("DROP TABLE " + tmpTableName);
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 55 && newVersion >= 55) {
+                Log_OC.i(SQL, "Entering in the #55 add synced.name_collision_policy.");
+                db.beginTransaction();
+                try {
+                    // Add synced.name_collision_policy
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.SYNCED_FOLDERS_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.SYNCED_FOLDER_NAME_COLLISION_POLICY + " INTEGER "); // integer
+
+                    // make sure all existing folders set to FileUploader.NameCollisionPolicy.ASK_USER.
+                    db.execSQL("UPDATE " + ProviderTableMeta.SYNCED_FOLDERS_TABLE_NAME + " SET " +
+                                   ProviderTableMeta.SYNCED_FOLDER_NAME_COLLISION_POLICY + " = " +
+                                   FileUploader.NameCollisionPolicy.ASK_USER.serialize());
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 56 && newVersion >= 56) {
+                Log_OC.i(SQL, "Entering in the #56 add decrypted remote path");
+                db.beginTransaction();
+                try {
+                    // Add synced.name_collision_policy
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.FILE_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.FILE_PATH_DECRYPTED + " TEXT "); // strin
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 57 && newVersion >= 57) {
+                Log_OC.i(SQL, "Entering in the #57 add etag for capabilities");
+                db.beginTransaction();
+                try {
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.CAPABILITIES_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.CAPABILITIES_ETAG + " TEXT ");
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 58 && newVersion >= 58) {
+                Log_OC.i(SQL, "Entering in the #58 add public link to share table");
+                db.beginTransaction();
+                try {
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.OCSHARES_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.OCSHARES_SHARE_LINK + " TEXT ");
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 59 && newVersion >= 59) {
+                Log_OC.i(SQL, "Entering in the #59 add public label to share table");
+                db.beginTransaction();
+                try {
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.OCSHARES_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.OCSHARES_SHARE_LABEL + " TEXT ");
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 60 && newVersion >= 60) {
+                Log_OC.i(SQL, "Entering in the #60 add user status to capability table");
+                db.beginTransaction();
+                try {
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.CAPABILITIES_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.CAPABILITIES_USER_STATUS + " INTEGER ");
+                    db.execSQL(ALTER_TABLE + ProviderTableMeta.CAPABILITIES_TABLE_NAME +
+                                   ADD_COLUMN + ProviderTableMeta.CAPABILITIES_USER_STATUS_SUPPORTS_EMOJI + " INTEGER ");
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
+            }
+
+            if (oldVersion < 61 && newVersion >= 61) {
+                Log_OC.i(SQL, "Entering in the #61 reset eTag to force capability refresh");
+                db.beginTransaction();
+                try {
+                    db.execSQL("UPDATE capabilities SET etag = '' WHERE 1=1");
+
+                    upgraded = true;
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            }
+
+            if (!upgraded) {
+                Log_OC.i(SQL, String.format(Locale.ENGLISH, UPGRADE_VERSION_MSG, oldVersion, newVersion));
             }
         }
     }

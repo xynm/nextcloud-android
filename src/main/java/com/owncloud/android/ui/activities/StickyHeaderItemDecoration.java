@@ -21,7 +21,6 @@
 package com.owncloud.android.ui.activities;
 
 import android.graphics.Canvas;
-import android.graphics.Color;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -116,6 +115,4 @@ public class StickyHeaderItemDecoration extends RecyclerView.ItemDecoration {
         view.measure(childWidthSpec, childHeightSpec);
         view.layout(0, 0, view.getMeasuredWidth(), view.getMeasuredHeight());
     }
-
-
 }

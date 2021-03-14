@@ -23,190 +23,149 @@
  */
 package com.owncloud.android.ui.trashbin;
 
-import android.accounts.Account;
-import android.content.Intent;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
-import android.widget.ImageView;
 import android.widget.PopupMenu;
 import android.widget.TextView;
 
 import com.google.android.material.snackbar.Snackbar;
+import com.nextcloud.client.account.CurrentAccountProvider;
+import com.nextcloud.client.account.User;
 import com.nextcloud.client.di.Injectable;
+import com.nextcloud.client.network.ClientFactory;
 import com.nextcloud.client.preferences.AppPreferences;
 import com.owncloud.android.R;
+import com.owncloud.android.databinding.TrashbinActivityBinding;
 import com.owncloud.android.lib.resources.trashbin.model.TrashbinFile;
 import com.owncloud.android.ui.EmptyRecyclerView;
-import com.owncloud.android.ui.activity.FileActivity;
-import com.owncloud.android.ui.activity.FileDisplayActivity;
+import com.owncloud.android.ui.activity.DrawerActivity;
 import com.owncloud.android.ui.adapter.TrashbinListAdapter;
 import com.owncloud.android.ui.dialog.SortingOrderDialogFragment;
 import com.owncloud.android.ui.interfaces.TrashbinActivityInterface;
+import com.owncloud.android.utils.DisplayUtils;
 import com.owncloud.android.utils.FileSortOrder;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeLayoutUtils;
 
 import java.util.List;
 
 import javax.inject.Inject;
 
-import androidx.appcompat.widget.Toolbar;
-import androidx.fragment.app.FragmentManager;
-import androidx.fragment.app.FragmentTransaction;
+import androidx.annotation.VisibleForTesting;
+import androidx.core.content.res.ResourcesCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
-import butterknife.BindString;
-import butterknife.BindView;
-import butterknife.ButterKnife;
-import butterknife.Unbinder;
+
+import static com.owncloud.android.utils.DisplayUtils.openSortingOrderDialogFragment;
 
 /**
  * Presenting trashbin data, received from presenter
  */
-public class TrashbinActivity extends FileActivity implements
-        TrashbinActivityInterface,
-        SortingOrderDialogFragment.OnSortingOrderListener,
-        TrashbinContract.View,
-        Injectable {
+public class TrashbinActivity extends DrawerActivity implements
+    TrashbinActivityInterface,
+    SortingOrderDialogFragment.OnSortingOrderListener,
+    TrashbinContract.View,
+    Injectable {
 
-    @BindView(R.id.empty_list_view_text)
-    public TextView emptyContentMessage;
-
-    @BindView(R.id.empty_list_view_headline)
-    public TextView emptyContentHeadline;
-
-    @BindView(R.id.empty_list_icon)
-    public ImageView emptyContentIcon;
-
-    @BindView(android.R.id.list)
-    public EmptyRecyclerView recyclerView;
-
-    @BindView(R.id.swipe_containing_list)
-    public SwipeRefreshLayout swipeListRefreshLayout;
-
-    @BindString(R.string.trashbin_empty_headline)
-    public String noResultsHeadline;
-
-    @BindString(R.string.trashbin_empty_message)
-    public String noResultsMessage;
-
+    public static final int EMPTY_LIST_COUNT = 1;
     @Inject AppPreferences preferences;
-    private Unbinder unbinder;
+    @Inject CurrentAccountProvider accountProvider;
+    @Inject ClientFactory clientFactory;
     private TrashbinListAdapter trashbinListAdapter;
-    private TrashbinPresenter trashbinPresenter;
+
+    @VisibleForTesting
+    TrashbinPresenter trashbinPresenter;
 
     private boolean active;
+    private TrashbinActivityBinding binding;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        final Account currentAccount = getUserAccountManager().getCurrentAccount();
-        final RemoteTrashbinRepository trashRepository = new RemoteTrashbinRepository(this, currentAccount);
+        final User user = accountProvider.getUser();
+        final RemoteTrashbinRepository trashRepository = new RemoteTrashbinRepository(user, clientFactory);
         trashbinPresenter = new TrashbinPresenter(trashRepository, this);
 
-        setContentView(R.layout.trashbin_activity);
-        unbinder = ButterKnife.bind(this);
+        binding = TrashbinActivityBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
 
-        // setup toolbar
         setupToolbar();
-
-        // setup drawer
+        findViewById(R.id.sort_list_button_group).setVisibility(View.VISIBLE);
+        findViewById(R.id.switch_grid_view_button).setVisibility(View.GONE);
+        updateActionBarTitleAndHomeButtonByString(getString(R.string.trashbin_activity_title));
         setupDrawer(R.id.nav_trashbin);
-
-        ThemeUtils.setColoredTitle(getSupportActionBar(), R.string.trashbin_activity_title, this);
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-
         active = true;
-
         setupContent();
     }
 
     private void setupContent() {
-        recyclerView = findViewById(android.R.id.list);
-        recyclerView.setEmptyView(findViewById(R.id.empty_list_view));
-        findViewById(R.id.empty_list_progress).setVisibility(View.GONE);
-        emptyContentIcon.setImageResource(R.drawable.ic_delete);
-        emptyContentIcon.setVisibility(View.VISIBLE);
-        emptyContentHeadline.setText(noResultsHeadline);
-        emptyContentMessage.setText(noResultsMessage);
-        emptyContentMessage.setVisibility(View.VISIBLE);
+        EmptyRecyclerView recyclerView = binding.list;
+        recyclerView.setEmptyView(binding.emptyList.emptyListView);
+        binding.emptyList.emptyListView.setVisibility(View.GONE);
+        binding.emptyList.emptyListIcon.setImageResource(R.drawable.ic_delete);
+        binding.emptyList.emptyListIcon.setVisibility(View.VISIBLE);
+        binding.emptyList.emptyListViewHeadline.setText(getString(R.string.trashbin_empty_headline));
+        binding.emptyList.emptyListViewText.setText(getString(R.string.trashbin_empty_message));
+        binding.emptyList.emptyListViewText.setVisibility(View.VISIBLE);
 
         trashbinListAdapter = new TrashbinListAdapter(
             this,
             getStorageManager(),
             preferences,
             this,
-            getUserAccountManager().getCurrentAccount()
+            getUserAccountManager().getUser()
         );
         recyclerView.setAdapter(trashbinListAdapter);
         recyclerView.setHasFixedSize(true);
         recyclerView.setHasFooter(true);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
 
-        swipeListRefreshLayout.setOnRefreshListener(this::loadFolder);
+        ThemeLayoutUtils.colorSwipeRefreshLayout(this, binding.swipeContainingList);
+        binding.swipeContainingList.setOnRefreshListener(this::loadFolder);
+
+        findViewById(R.id.sort_button).setOnClickListener(l ->
+                                                              openSortingOrderDialogFragment(getSupportFragmentManager(),
+                                                                                             preferences.getSortOrderByType(
+                                                                                                 FileSortOrder.Type.trashBinView,
+                                                                                                 FileSortOrder.sort_new_to_old))
+                                                         );
 
         loadFolder();
     }
 
-    private void loadFolder() {
-        swipeListRefreshLayout.setRefreshing(true);
+    protected void loadFolder() {
+        if (trashbinListAdapter.getItemCount() > EMPTY_LIST_COUNT) {
+            binding.swipeContainingList.setRefreshing(true);
+        } else {
+            showInitialLoading();
+        }
         trashbinPresenter.loadFolder();
-    }
-
-    @Override
-    public void showFiles(boolean onDeviceOnly) {
-        super.showFiles(onDeviceOnly);
-        Intent i = new Intent(getApplicationContext(), FileDisplayActivity.class);
-        i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        startActivity(i);
     }
 
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         boolean retval = true;
-        switch (item.getItemId()) {
-            case android.R.id.home:
-                if (isDrawerOpen()) {
-                    closeDrawer();
-                } else if (trashbinPresenter.isRoot()) {
-                    onBackPressed();
-                } else {
-                    openDrawer();
-                }
-                break;
-            case R.id.action_sort: {
-                FragmentManager fm = getSupportFragmentManager();
-                FragmentTransaction ft = fm.beginTransaction();
-                ft.addToBackStack(null);
-
-                SortingOrderDialogFragment mSortingOrderDialogFragment = SortingOrderDialogFragment.newInstance(
-                    preferences.getSortOrderByType(FileSortOrder.Type.trashBinView, FileSortOrder.sort_new_to_old));
-                mSortingOrderDialogFragment.show(ft, SortingOrderDialogFragment.SORTING_ORDER_FRAGMENT);
-
-                break;
+        int itemId = item.getItemId();
+        if (itemId == android.R.id.home) {
+            if (isDrawerOpen()) {
+                closeDrawer();
+            } else if (trashbinPresenter.isRoot()) {
+                onBackPressed();
+            } else {
+                openDrawer();
             }
-            case R.id.action_empty_trashbin:
-                trashbinPresenter.emptyTrashbin();
-                break;
-
-            default:
-                retval = super.onOptionsItemSelected(item);
-                break;
+        } else if (itemId == R.id.action_empty_trashbin) {
+            trashbinPresenter.emptyTrashbin();
+        } else {
+            retval = super.onOptionsItemSelected(item);
         }
 
         return retval;
-    }
-
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-        unbinder.unbind();
     }
 
     @Override
@@ -228,11 +187,6 @@ public class TrashbinActivity extends FileActivity implements
             trashbinPresenter.enterFolder(file.getRemotePath());
 
             mDrawerToggle.setDrawerIndicatorEnabled(false);
-
-            Toolbar toolbar = findViewById(R.id.toolbar);
-            if (toolbar != null && toolbar.getNavigationIcon() != null) {
-                ThemeUtils.tintDrawable(toolbar.getNavigationIcon(), ThemeUtils.fontColor(this));
-            }
         }
     }
 
@@ -272,6 +226,8 @@ public class TrashbinActivity extends FileActivity implements
 
     @Override
     public void onSortingOrderChosen(FileSortOrder sortOrder) {
+        TextView sortButton = findViewById(R.id.sort_button);
+        sortButton.setText(DisplayUtils.getSortOrderStringId(sortOrder));
         trashbinListAdapter.setSortOrder(sortOrder);
     }
 
@@ -279,7 +235,9 @@ public class TrashbinActivity extends FileActivity implements
     public void showTrashbinFolder(List<Object> trashbinFiles) {
         if (active) {
             trashbinListAdapter.setTrashbinFiles(trashbinFiles, true);
-            swipeListRefreshLayout.setRefreshing(false);
+            binding.swipeContainingList.setRefreshing(false);
+            binding.loadingContent.setVisibility(View.GONE);
+            binding.list.setVisibility(View.VISIBLE);
         }
     }
 
@@ -298,25 +256,34 @@ public class TrashbinActivity extends FileActivity implements
     @Override
     public void showSnackbarError(int message, TrashbinFile file) {
         if (active) {
-            swipeListRefreshLayout.setRefreshing(false);
-            Snackbar.make(recyclerView, String.format(getString(message), file.getFileName()), Snackbar.LENGTH_LONG)
+            binding.swipeContainingList.setRefreshing(false);
+            Snackbar.make(binding.list,
+                          String.format(getString(message), file.getFileName()), Snackbar.LENGTH_LONG)
                 .show();
         }
+    }
+
+    @VisibleForTesting
+    public void showInitialLoading() {
+        binding.loadingContent.setVisibility(View.VISIBLE);
+        binding.list.setVisibility(View.GONE);
     }
 
     @Override
     public void showError(int message) {
         if (active) {
-            swipeListRefreshLayout.setRefreshing(false);
+            binding.loadingContent.setVisibility(View.GONE);
+            binding.list.setVisibility(View.VISIBLE);
+            binding.swipeContainingList.setRefreshing(false);
 
-            if (emptyContentMessage != null) {
-                emptyContentHeadline.setText(R.string.common_error);
-                emptyContentIcon.setImageDrawable(getResources().getDrawable(R.drawable.ic_list_empty_error));
-                emptyContentMessage.setText(message);
-
-                emptyContentMessage.setVisibility(View.VISIBLE);
-                emptyContentIcon.setVisibility(View.VISIBLE);
-            }
+            binding.emptyList.emptyListViewHeadline.setText(R.string.common_error);
+            binding.emptyList.emptyListIcon.setImageDrawable(ResourcesCompat.getDrawable(getResources(),
+                                                                                         R.drawable.ic_list_empty_error,
+                                                                                         null));
+            binding.emptyList.emptyListViewText.setText(message);
+            binding.emptyList.emptyListViewText.setVisibility(View.VISIBLE);
+            binding.emptyList.emptyListIcon.setVisibility(View.VISIBLE);
+            binding.emptyList.emptyListView.setVisibility(View.VISIBLE);
         }
     }
 }

@@ -40,17 +40,18 @@ import android.widget.TextView;
 
 import com.owncloud.android.R;
 import com.owncloud.android.lib.common.utils.Log_OC;
-import com.owncloud.android.utils.ThemeUtils;
+import com.owncloud.android.utils.theme.ThemeBarUtils;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
 
 import java.util.Formatter;
 import java.util.Locale;
 
 
 /**
- * View containing controls for a {@link MediaPlayer}. 
- *
- * Holds buttons "play / pause", "rewind", "fast forward" and a progress slider. 
- *
+ * View containing controls for a {@link MediaPlayer}.
+ * <p>
+ * Holds buttons "play / pause", "rewind", "fast forward" and a progress slider.
+ * <p>
  * It synchronizes itself with the state of the {@link MediaPlayer}.
  */
 public class MediaControlView extends FrameLayout implements OnClickListener, OnSeekBarChangeListener {
@@ -125,10 +126,10 @@ public class MediaControlView extends FrameLayout implements OnClickListener, On
         if (progressBar != null) {
             if (progressBar instanceof SeekBar) {
                 SeekBar seeker = (SeekBar) progressBar;
-                ThemeUtils.colorHorizontalSeekBar(seeker, getContext());
+                ThemeBarUtils.colorHorizontalSeekBar(seeker, getContext());
                 seeker.setOnSeekBarChangeListener(this);
             } else {
-                ThemeUtils.colorHorizontalProgressBar(progressBar, ThemeUtils.primaryAccentColor(getContext()));
+                ThemeBarUtils.colorHorizontalProgressBar(progressBar, ThemeColorUtils.primaryAccentColor(getContext()));
             }
             progressBar.setMax(1000);
         }
@@ -165,13 +166,11 @@ public class MediaControlView extends FrameLayout implements OnClickListener, On
     private Handler handler = new Handler() {
         @Override
         public void handleMessage(Message msg) {
-            int pos;
             if (msg.what == SHOW_PROGRESS) {
                 updatePausePlay();
-                pos = setProgress();
+                int pos = setProgress();
                 if (!isDragging) {
-                    msg = obtainMessage(SHOW_PROGRESS);
-                    sendMessageDelayed(msg, 1000 - (pos % 1000));
+                    sendMessageDelayed(obtainMessage(SHOW_PROGRESS), 1000 - (pos % 1000));
                 }
             }
         }
@@ -313,7 +312,6 @@ public class MediaControlView extends FrameLayout implements OnClickListener, On
         int pos;
         boolean playing = playerControl.isPlaying();
         switch (v.getId()) {
-
             case R.id.playBtn:
                 doPauseResume();
                 break;
@@ -336,6 +334,10 @@ public class MediaControlView extends FrameLayout implements OnClickListener, On
                     playerControl.pause(); // necessary in some 2.3.x devices
                 }
                 setProgress();
+                break;
+
+            default:
+                // do nothing
                 break;
         }
     }

@@ -27,6 +27,7 @@ import android.os.Looper;
 import android.os.Message;
 import android.util.Pair;
 
+import com.nextcloud.client.account.User;
 import com.owncloud.android.datamodel.FileDataStorageManager;
 import com.owncloud.android.datamodel.OCFile;
 import com.owncloud.android.files.services.FileDownloader;
@@ -37,9 +38,10 @@ import com.owncloud.android.lib.common.OwnCloudClientManagerFactory;
 import com.owncloud.android.lib.common.operations.RemoteOperationResult;
 import com.owncloud.android.lib.common.utils.Log_OC;
 import com.owncloud.android.operations.SynchronizeFolderOperation;
-import com.owncloud.android.utils.FileStorageUtils;
 
 import java.io.IOException;
+
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 /**
  * SyncFolder worker. Performs the pending operations in the order they were requested.
@@ -72,14 +74,14 @@ class SyncFolderHandler extends Handler {
      * Returns True when the folder located in 'remotePath' in the ownCloud account 'account', or any of its
      * descendants, is being synchronized (or waiting for it).
      *
-     * @param account       ownCloud account where the remote folder is stored.
+     * @param user          user where the remote folder is stored.
      * @param remotePath    The path to a folder that could be in the queue of synchronizations.
      */
-    public boolean isSynchronizing(Account account, String remotePath) {
-        if (account == null || remotePath == null) {
+    public boolean isSynchronizing(User user, String remotePath) {
+        if (user == null || remotePath == null) {
             return false;
         }
-        return mPendingOperations.contains(account.name, remotePath);
+        return mPendingOperations.contains(user.getAccountName(), remotePath);
     }
 
     @Override
@@ -123,7 +125,7 @@ class SyncFolderHandler extends Handler {
             } catch (AccountsException | IOException e) {
                 sendBroadcastFinishedSyncFolder(account, remotePath, false);
                 mService.dispatchResultToOperationListeners(mCurrentSyncOperation, new RemoteOperationResult(e));
-                
+
                 Log_OC.e(TAG, "Error while trying to get authorization", e);
             } finally {
                 mPendingOperations.removePayload(account.name, remotePath);
@@ -152,14 +154,14 @@ class SyncFolderHandler extends Handler {
             return;
         }
         Pair<SynchronizeFolderOperation, String> removeResult = mPendingOperations.remove(account.name,
-                file.getRemotePath());
+                                                                                          file.getRemotePath());
         SynchronizeFolderOperation synchronization = removeResult.first;
         if (synchronization != null) {
             synchronization.cancel();
         } else {
             // TODO synchronize?
             if (mCurrentSyncOperation != null && mCurrentAccount != null &&
-                    mCurrentSyncOperation.getRemotePath().startsWith(file.getRemotePath()) &&
+                mCurrentSyncOperation.getRemotePath().startsWith(file.getRemotePath()) &&
                     account.name.equals(mCurrentAccount.name)) {
                 mCurrentSyncOperation.cancel();
             }
@@ -176,10 +178,8 @@ class SyncFolderHandler extends Handler {
         Intent added = new Intent(FileDownloader.getDownloadAddedMessage());
         added.putExtra(FileDownloader.ACCOUNT_NAME, account.name);
         added.putExtra(FileDownloader.EXTRA_REMOTE_PATH, remotePath);
-        added.putExtra(FileDownloader.EXTRA_FILE_PATH, FileStorageUtils.getSavePath(account.name)
-                + remotePath);
         added.setPackage(mService.getPackageName());
-        mService.sendStickyBroadcast(added);
+        LocalBroadcastManager.getInstance(mService.getApplicationContext()).sendBroadcast(added);
     }
 
     /**
@@ -191,10 +191,8 @@ class SyncFolderHandler extends Handler {
         Intent finished = new Intent(FileDownloader.getDownloadFinishMessage());
         finished.putExtra(FileDownloader.ACCOUNT_NAME, account.name);
         finished.putExtra(FileDownloader.EXTRA_REMOTE_PATH, remotePath);
-        finished.putExtra(FileDownloader.EXTRA_FILE_PATH,
-                FileStorageUtils.getSavePath(account.name) + remotePath);
         finished.putExtra(FileDownloader.EXTRA_DOWNLOAD_RESULT, success);
         finished.setPackage(mService.getPackageName());
-        mService.sendStickyBroadcast(finished);
+        LocalBroadcastManager.getInstance(mService.getApplicationContext()).sendBroadcast(finished);
     }
 }

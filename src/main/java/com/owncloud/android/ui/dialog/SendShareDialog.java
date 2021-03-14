@@ -25,9 +25,7 @@ import com.owncloud.android.ui.adapter.SendButtonAdapter;
 import com.owncloud.android.ui.components.SendButtonData;
 import com.owncloud.android.ui.helpers.FileOperationsHelper;
 import com.owncloud.android.utils.MimeTypeUtil;
-import com.owncloud.android.utils.ThemeUtils;
-
-import org.jetbrains.annotations.NotNull;
+import com.owncloud.android.utils.theme.ThemeColorUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -106,7 +104,7 @@ public class SendShareDialog extends BottomSheetDialogFragment {
 
     @Nullable
     @Override
-    public View onCreateView(@NotNull LayoutInflater inflater,
+    public View onCreateView(@NonNull LayoutInflater inflater,
                              @Nullable ViewGroup container,
                              @Nullable Bundle savedInstanceState) {
 
@@ -168,7 +166,7 @@ public class SendShareDialog extends BottomSheetDialogFragment {
 
         RecyclerView sendButtonsView = view.findViewById(R.id.send_button_recycler_view);
         sendButtonsView.setHasFixedSize(true);
-        sendButtonsView.setLayoutManager(new GridLayoutManager(getActivity(), 3));
+        sendButtonsView.setLayoutManager(new GridLayoutManager(getActivity(), 4));
         sendButtonsView.setAdapter(new SendButtonAdapter(sendButtonDataList, clickListener));
 
         return view;
@@ -182,7 +180,7 @@ public class SendShareDialog extends BottomSheetDialogFragment {
             requestPasswordForShareViaLink();
         } else {
             // create without password if not enforced by server or we don't know if enforced;
-            ((FileActivity) getActivity()).getFileOperationsHelper().shareFileViaLink(file, null);
+            ((FileActivity) getActivity()).getFileOperationsHelper().shareFileViaPublicShare(file, null);
         }
 
         this.dismiss();
@@ -196,9 +194,11 @@ public class SendShareDialog extends BottomSheetDialogFragment {
     }
 
     private void themeShareButtonImage(ImageView shareImageView) {
-        shareImageView.getBackground().setColorFilter(ThemeUtils.elementColor(getContext()), PorterDuff.Mode.SRC_IN);
-        shareImageView.getDrawable().mutate().setColorFilter(ThemeUtils.fontColor(getContext()),
-                PorterDuff.Mode.SRC_IN);
+        shareImageView.getBackground().setColorFilter(ThemeColorUtils.primaryColor(getContext().getApplicationContext(),
+                                                                                   true),
+                                                      PorterDuff.Mode.SRC_IN);
+        shareImageView.getDrawable().mutate().setColorFilter(ThemeColorUtils.fontColor(getContext().getApplicationContext()),
+                                                             PorterDuff.Mode.SRC_IN);
     }
 
     private void showResharingNotAllowedSnackbar() {
@@ -243,11 +243,15 @@ public class SendShareDialog extends BottomSheetDialogFragment {
 
     @NonNull
     private List<SendButtonData> setupSendButtonData(Intent sendIntent) {
-        List<SendButtonData> sendButtonDataList = new ArrayList<>();
-        for (ResolveInfo match : getActivity().getPackageManager().queryIntentActivities(sendIntent, 0)) {
-            Drawable icon = match.loadIcon(getActivity().getPackageManager());
-            CharSequence label = match.loadLabel(getActivity().getPackageManager());
-            SendButtonData sendButtonData = new SendButtonData(icon, label,
+        Drawable icon;
+        SendButtonData sendButtonData;
+        CharSequence label;
+        List<ResolveInfo> matches = requireActivity().getPackageManager().queryIntentActivities(sendIntent, 0);
+        List<SendButtonData> sendButtonDataList = new ArrayList<>(matches.size());
+        for (ResolveInfo match : matches) {
+            icon = match.loadIcon(requireActivity().getPackageManager());
+            label = match.loadLabel(requireActivity().getPackageManager());
+            sendButtonData = new SendButtonData(icon, label,
                     match.activityInfo.packageName,
                     match.activityInfo.name);
 
@@ -266,12 +270,13 @@ public class SendShareDialog extends BottomSheetDialogFragment {
     }
 
     private void shareFile(OCFile file) {
+        dismiss();
+
         if (getActivity() instanceof FileDisplayActivity) {
             ((FileDisplayActivity) getActivity()).showDetails(file, 1);
         } else {
             fileOperationsHelper.showShareFile(file);
         }
-        dismiss();
     }
 
     public void setFileOperationsHelper(FileOperationsHelper fileOperationsHelper) {
